@@ -96,10 +96,12 @@ def executar(coletor: Coletor, ctx: Contexto, reprocessar: bool = False) -> Resu
 
     registros = [repo.gravar_bruto(fonte, a) for a in arquivos]
     novos = sum(r.novo for r in registros)
-    series_existem = all(
+    # Algumas séries são opcionais (ex.: variante mensal de uma fonte manual), então basta
+    # que alguma já tenha sido gravada. Para forçar a reinterpretação, use reprocessar=True.
+    ja_processado = any(
         (repo.versoes(s) if s.versionada else repo.caminho_serie(s).exists()) for s in coletor.series
     )
-    if novos == 0 and series_existem and not reprocessar:
+    if novos == 0 and ja_processado and not reprocessar:
         log.info("%s: sem novidade (arquivos idênticos aos já registrados)", fonte)
         return ResultadoColeta(fonte, "sem_novidade", 0)
 
