@@ -90,7 +90,11 @@ def cmd_calcular(args) -> int:
 
     bases_dir = resolver_bases_dir(args.bases)
     cfg = ConfigProjeto.de_toml(args.projeto)
-    resultado = calcular(cfg, Bases(Repositorio(bases_dir)))
+    try:
+        resultado = calcular(cfg, Bases(Repositorio(bases_dir)))
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        print(f"Não foi possível calcular {cfg.projeto} (data-base {cfg.data_base}):\n  {e}", file=sys.stderr)
+        return 2
     print(f"{cfg.projeto} — data-base {cfg.data_base} (mês de corte {resultado.corte})\n")
     for c in resultado.componentes.values():
         print(f"  {c.nome:<36} {c.valor * 100:9.4f}%   {c.rotulo}")

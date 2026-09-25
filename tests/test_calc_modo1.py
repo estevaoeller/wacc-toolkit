@@ -107,3 +107,20 @@ def test_base_desatualizada_e_erro_claro(bases_sinteticas):
 def test_setor_inexistente(bases_sinteticas):
     with pytest.raises(KeyError, match="Setor Z"):
         calcular(_cfg(fases=[Fase("Setor Z", 1.0)]), bases_sinteticas)
+
+
+def test_cds_mensal_completado_pela_serie_diaria(repo, bases_sinteticas):
+    """Meses sem CDS mensal usam o último pregão do mês da série diária (fonte manual do Investing)."""
+    cds = _mensal("2010-01", "2025-06", 0.0).rename(columns={"valor": "ultimo"})
+    cds["ultimo"], cds["abertura"], cds["maxima"], cds["minima"] = 250.0, 250.0, 250.0, 250.0
+    _gravar(repo, "investing_cds10_brasil_mensal", cds)
+    dias = pd.bdate_range("2025-06-01", "2025-12-31")
+    d = pd.DataFrame({"data": dias.date, "ultimo": 100.0, "abertura": 1.0, "maxima": 1.0, "minima": 1.0})
+    d.loc[d.groupby(pd.to_datetime(d["data"]).dt.to_period("M"))["data"].idxmax(), "ultimo"] = 310.0
+    _gravar(repo, "investing_cds10_brasil", d)
+    r = calcular(_cfg(), Bases(repo))
+    rb = r.componentes["risco_brasil"]
+    assert rb.detalhes["n_cds"] == 120
+    assert rb.detalhes["cds_medio_bps"] == pytest.approx((114 * 250 + 6 * 310) / 120)  # jul–dez/25 do diário
+    assert list(rb.recortes[0].df["origem"]).count("diário (último pregão)") == 6
+    assert rb.recortes[-1].serie == "investing_cds10_brasil"

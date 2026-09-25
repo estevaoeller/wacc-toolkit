@@ -69,6 +69,7 @@ URLS_SERIE = {
     "fred_fii10": "https://fred.stlouisfed.org/series/FII10",
     "yahoo_sp500tr": "https://finance.yahoo.com/quote/%5ESP500TR/history",
     "investing_cds10_brasil_mensal": "https://br.investing.com/rates-bonds/brazil-cds-10-years-usd-historical-data",
+    "investing_cds10_brasil": "https://br.investing.com/rates-bonds/brazil-cds-10-years-usd-historical-data",
     "b3_ibov": "https://www.b3.com.br/pt_br/market-data-e-indices/indices/indices-amplos/"
                "indice-ibovespa-ibovespa-estatisticas-historicas.htm",
     "tesouro_td_taxas": "https://www.tesourotransparente.gov.br/ckan/dataset/"
@@ -436,7 +437,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     # ---- Risco Brasil
     def _risco_brasil_formula() -> str:
         comp = c["risco_brasil"]
-        rec_cds, rec_ibov, rec_ntnb = comp.recortes
+        rec_cds, rec_ibov, rec_ntnb = comp.recortes[:3]
         _, ci, r0c, r1c = _sheet_basico(wb, abas_usadas, rec_cds.nome, rec_cds)
         col_cds = _col_letra(ci, "ultimo")
         aba_cds = wb.sheetnames[-1]

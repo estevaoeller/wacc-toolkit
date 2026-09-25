@@ -199,11 +199,20 @@ def rm(bases: Bases, corte: pd.Period, metodo: str, espec: str) -> Componente:
 
 
 def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
-    # CDS 10 anos, média mensal
+    # CDS 10 anos, média mensal. Meses ausentes na série mensal são completados pela série
+    # diária (último pregão do mês = "Último" do Investing mensal).
     dfc, mc = bases.ler("investing_cds10_brasil_mensal")
     jc = interpretar(op.cds_janela, corte)
-    cds = _na_janela(_mensal(dfc, "ultimo"), jc)
-    _exigir_cobertura(cds, jc, "CDS 10a")
+    mensal_cds = _mensal(dfc, "ultimo")
+    try:
+        dfd, md = bases.ler("investing_cds10_brasil")
+        do_diario = _mensal_ultimo(dfd, "ultimo")
+        completados = do_diario.index.difference(mensal_cds.index)
+        mensal_cds = pd.concat([mensal_cds, do_diario.loc[completados]]).sort_index()
+    except FileNotFoundError:
+        dfd, md, completados = None, None, pd.PeriodIndex([], freq="M")
+    cds = _na_janela(mensal_cds, jc)
+    _exigir_cobertura(cds, jc, "CDS 10a (baixe o CSV do Investing para Bases/entrada/investing/)")
     # Volatilidades diárias (retornos ln) — Ibovespa (B3) e PU da NTN-B
     jv = interpretar(op.vol_janela, corte)
     dfi, mi = bases.ler("b3_ibov")
@@ -223,14 +232,26 @@ def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
     mult = s_ibov / s_ntnb
     valor = cds.mean() * mult / 10_000
     ini_v = pd.Timestamp(jv.data_inicio) - pd.Timedelta(days=10)
+    # recorte do CDS = série mensal efetivamente usada (coluna "origem": mensal | diário)
+    meses_diario = [p for p in completados if jc.inicio <= p <= jc.fim]
+    cds_usado = pd.DataFrame({"data": cds.index.to_timestamp(), "ultimo": cds.values,
+                              "origem": ["diário (último pregão)" if p in meses_diario else "mensal" for p in cds.index]})
     recs = [
-        bases.recorte("cds10", "investing_cds10_brasil_mensal", jc.filtrar(dfc), mc, "CDS Brasil 10a, mensal (bps)"),
+        bases.recorte("cds10", "investing_cds10_brasil_mensal", cds_usado, mc,
+                      "CDS Brasil 10a, média mensal (bps)" + ("; meses completados pela série diária" if meses_diario else "")),
+    ]
+    recs += [
         bases.recorte("ibov", "b3_ibov", dfi[(dfi["data"] >= ini_v) & (dfi["data"] <= pd.Timestamp(jv.data_fim))],
                       mi, "Ibovespa, fechamento diário (inclui o pregão anterior à janela)"),
         bases.recorte("ntnb", "tesouro_td_taxas",
                       ntnb[(ntnb["data"] >= ini_v) & (ntnb["data"] <= pd.Timestamp(jv.data_fim))], mt,
                       f"{NTNB_TITULO} {op.ntnb_vencimento}, PU base diário"),
     ]
+    if meses_diario:  # rastreabilidade da base diária (hash no Registro); sempre após os 3 recortes principais
+        usados_d = dfd[pd.to_datetime(dfd["data"]).dt.to_period("M").isin(meses_diario)]
+        recs.append(bases.recorte("cds10_diario", "investing_cds10_brasil", usados_d, md,
+                                  "CDS Brasil 10a, diário (meses sem dado mensal)",
+                                  meses=[str(p) for p in meses_diario]))
     return Componente(
         "risco_brasil", "Prêmio de risco Brasil", valor, "média CDS 10a (bps) × σ(ln Ibov) / σ(ln PU NTN-B) / 10.000",
         f"CDS 10a {jc.rotulo()} × vol. {jv.rotulo()} (Ibov/NTN-B {op.ntnb_vencimento[:4]})",
