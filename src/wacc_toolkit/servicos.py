@@ -20,8 +20,17 @@ from .calc.registro import gravar_registro
 from .collector import Contexto, ResultadoColeta, executar
 from .config import resolver_bases_dir
 from .registry import carregar_todos
+from .saida.rotulos import KD_ITENS, KE_ITENS, ROTULOS, WACC_ITENS
+from .saida.rotulos import descricoes as _descricoes_custo_de_capital
 from .series import SerieSpec
 from .storage import Repositorio
+
+# séries opcionais: variantes de uma fonte manual que podem legitimamente não ter dados
+# (ex.: o usuário só baixou o CSV mensal do Investing, não o diário). Sem dados nelas não é
+# uma falha a ser alertada, ao contrário das demais séries.
+SERIES_OPCIONAIS: set[str] = {
+    "investing_cds10_brasil", "investing_cds5_brasil", "investing_ibov_mensal", "investing_cds5_brasil_mensal",
+}
 
 # ------------------------------------------------------------------ catálogo de opções (modo 1)
 # valor gravado na configuração -> rótulo exibido
@@ -155,11 +164,20 @@ def setores_damodaran(amb: Ambiente, regiao: str, data_base: date) -> list[str]:
     return sorted(df["industry_name"].dropna().astype(str).unique())
 
 
+def _fonte_bndes_legivel(fonte: str) -> str:
+    """Só a parte legível da fonte (sem o parenteses de detalhe nem o prefixo 'BNDES ')."""
+    texto = fonte.split(" (")[0].strip()
+    if texto.startswith("BNDES "):
+        texto = texto[len("BNDES "):]
+    return texto
+
+
 def linhas_bndes(amb: Ambiente) -> dict[str, str]:
-    """id do parâmetro -> descrição, para as linhas de remuneração BNDES."""
+    """id do parâmetro -> descrição legível (sem o id técnico), para as linhas de remuneração BNDES."""
     df, _ = ler_serie(amb, "parametros_manuais")
     df = df[df["parametro"].str.startswith("bndes_rem")]
-    return {r.parametro: f"{r.fonte} ({r.valor:.2f}% a.a.)" for r in df.itertuples()}
+    return {r.parametro: f"{_fonte_bndes_legivel(r.fonte)} ({formatar_numero_pt(r.valor, 2)}% a.a.)"
+            for r in df.itertuples()}
 
 
 # ------------------------------------------------------------------ projetos (configuração)
@@ -239,6 +257,60 @@ def calcular_projeto(amb: Ambiente, cfg: ConfigProjeto, excel: bool = True) -> C
 def tabela_resultado(resultado: ResultadoWACC) -> pd.DataFrame:
     return pd.DataFrame([{"id": c.id, "item": c.nome, "valor": c.valor, "descricao": c.rotulo}
                          for c in resultado.componentes.values()])
+
+
+# ------------------------------------------------------------------ formatação pt-BR
+# id do componente -> ("pct" | "num", casas decimais); os demais são "pct" com 2 casas
+_FORMATOS_COMPONENTE: dict[str, tuple[str, int]] = {
+    "beta_u": ("num", 2), "beta_l": ("num", 3), "d_v": ("pct", 1), "t": ("pct", 1),
+}
+
+
+def formatar_numero_pt(valor: float | None, casas: int = 2) -> str:
+    """Número com vírgula decimal (e ponto como separador de milhar), ex.: 1234.5 -> '1.234,50'."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return ""
+    texto = f"{valor:,.{casas}f}"
+    return texto.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+def formatar_percentual_pt(valor: float | None, casas: int = 2) -> str:
+    """Fração decimal (0,1058 = 10,58%) formatada como percentual em pt-BR."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return ""
+    return f"{formatar_numero_pt(valor * 100, casas)}%"
+
+
+def formatar_valor_componente(id_componente: str, valor: float) -> str:
+    """Formata o valor de um componente do WACC (fração decimal) segundo a convenção da
+    tabela Custo de Capital: percentual com 2 casas, exceto beta_u/beta_l (número) e d_v/t
+    (percentual com 1 casa)."""
+    tipo, casas = _FORMATOS_COMPONENTE.get(id_componente, ("pct", 2))
+    return formatar_numero_pt(valor, casas) if tipo == "num" else formatar_percentual_pt(valor, casas)
+
+
+def _montar_tabela_custo_de_capital(valores: dict[str, float], descricoes_map: dict[str, str]) -> pd.DataFrame:
+    linhas = [
+        {"secao": secao, "item": ROTULOS[cid], "valor": formatar_valor_componente(cid, valores[cid]),
+         "descricao": descricoes_map.get(cid, "")}
+        for secao, ids in (("KE", KE_ITENS), ("KD", KD_ITENS), ("WACC", WACC_ITENS))
+        for cid in ids
+    ]
+    return pd.DataFrame(linhas, columns=["secao", "item", "valor", "descricao"])
+
+
+def tabela_custo_de_capital(resultado: ResultadoWACC) -> pd.DataFrame:
+    """Tabela Seção | Item | Valor | Descrição (ordem KE/KD/WACC), com os mesmos nomes de item e
+    descrições da aba "Custo de Capital" do Excel (:mod:`wacc_toolkit.saida.rotulos`)."""
+    valores = {k: comp.valor for k, comp in resultado.componentes.items()}
+    return _montar_tabela_custo_de_capital(valores, _descricoes_custo_de_capital(resultado))
+
+
+def tabela_custo_de_capital_de_registro(dados: dict) -> pd.DataFrame:
+    """Como :func:`tabela_custo_de_capital`, a partir do dict de um registro salvo (``ler_calculo``),
+    sem precisar recalcular nem acessar as bases."""
+    valores = {k: v["valor"] for k, v in dados["componentes"].items()}
+    return _montar_tabela_custo_de_capital(valores, _descricoes_custo_de_capital(dados))
 
 
 def listar_calculos(amb: Ambiente) -> pd.DataFrame:

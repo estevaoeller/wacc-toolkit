@@ -7,7 +7,7 @@ from datetime import date
 import streamlit as st
 
 from wacc_toolkit import servicos as sv
-from wacc_toolkit.app.estado import formatar_valor, obter_ambiente
+from wacc_toolkit.app.estado import FORMATO_DATA, formatar_valor, obter_ambiente
 
 st.title("Novo WACC")
 
@@ -73,13 +73,14 @@ if escolha is not None and st.session_state.nw_carregado != str(escolha):
         st.error(f"Não foi possível carregar {escolha.name}: {e}")
     else:
         st.session_state.nw_carregado = str(escolha)
+        st.session_state.nw_nome_arquivo = escolha.stem
 elif escolha is None and st.session_state.nw_carregado is not None:
     st.session_state.nw_carregado = None
 
 # ------------------------------------------------------------------ dados gerais
 c1, c2 = st.columns(2)
 projeto = c1.text_input("Projeto", key="nw_projeto")
-data_base = c2.date_input("Data-base", key="nw_data_base")
+data_base = c2.date_input("Data-base", key="nw_data_base", format=FORMATO_DATA)
 notas = st.text_area("Notas", key="nw_notas")
 regiao = st.selectbox("Região", ["global", "emerging"], key="nw_regiao")
 
@@ -114,7 +115,8 @@ if st.button("Adicionar fase", key="nw_botao_add_fase"):
 
 soma_pesos = sum(f["peso"] for f in st.session_state.nw_fases)
 pesos_ok = abs(soma_pesos - 100.0) < 1e-6
-(st.success if pesos_ok else st.error)(f"Soma dos pesos: {soma_pesos:.2f}%" + ("" if pesos_ok else " (deve ser 100%)"))
+(st.success if pesos_ok else st.error)(
+    f"Soma dos pesos: {sv.formatar_numero_pt(soma_pesos, 2)}%" + ("" if pesos_ok else " (deve ser 100%)"))
 
 # ------------------------------------------------------------------ dívida (BNDES)
 st.subheader("Dívida")
@@ -125,7 +127,7 @@ if linhas:
     linha_bndes = c1.selectbox(
         "Linha BNDES", ids,
         index=ids.index(st.session_state.nw_linha_bndes) if st.session_state.nw_linha_bndes in ids else 0,
-        format_func=lambda i: f"{i} — {linhas[i]}", key="nw_linha_bndes_sel",
+        format_func=lambda i: linhas[i], key="nw_linha_bndes_sel",
     )
 else:
     c1.info("Nenhuma linha BNDES cadastrada em parâmetros manuais.")
@@ -199,17 +201,10 @@ if calculo is not None:
     m1.metric("WACC real", formatar_valor("wacc_real", resultado["wacc_real"]))
     m2.metric("WACC nominal", formatar_valor("wacc_nominal", resultado["wacc_nominal"]))
 
-    tabela = sv.tabela_resultado(resultado).set_index("id")
-    secoes = {
-        "Ke": ["rf", "rm", "rf_estrutural", "erp", "risco_brasil", "beta_u", "d_v", "t", "beta_l", "ke_nominal",
-               "inflacao_us", "ke_real"],
-        "Kd": ["tlp", "remuneracao_bndes", "spread_credito", "ipca", "kd_nominal", "kd_real"],
-        "WACC": ["wacc_real", "wacc_nominal"],
-    }
-    for titulo, ids in secoes.items():
-        st.markdown(f"**{titulo}**")
-        linhas = tabela.loc[[i for i in ids if i in tabela.index]].reset_index()
-        linhas["valor"] = [formatar_valor(i, v) for i, v in zip(linhas["id"], linhas["valor"])]
+    tabela = sv.tabela_custo_de_capital(resultado)
+    for secao in ("KE", "KD", "WACC"):
+        st.markdown(f"**{secao}**")
+        linhas = tabela.loc[tabela["secao"] == secao, ["item", "valor", "descricao"]]
         st.dataframe(linhas.rename(columns={"item": "Item", "valor": "Valor", "descricao": "Descrição"}),
                     width="stretch", hide_index=True)
 

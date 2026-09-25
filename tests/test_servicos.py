@@ -74,3 +74,53 @@ def test_config_invalida_nao_e_gravada(amb):
     assert isinstance(sv.nova_config(projeto="x", data_base=date(2026, 1, 1),
                                      fases=[{"setor": "Setor A", "peso": 1.0}], linha_bndes="rem_x",
                                      spread_credito=0.01), ConfigProjeto)
+
+
+def test_formatacao_pt_br():
+    assert sv.formatar_numero_pt(1234.5, 2) == "1.234,50"
+    assert sv.formatar_percentual_pt(0.105841, 2) == "10,58%"
+    assert sv.formatar_valor_componente("beta_u", 0.61) == "0,61"
+    assert sv.formatar_valor_componente("beta_l", 0.9336) == "0,934"
+    assert sv.formatar_valor_componente("d_v", 0.4455) == "44,5%"
+    assert sv.formatar_valor_componente("t", 0.34) == "34,0%"
+    assert sv.formatar_valor_componente("wacc_real", 0.1058) == "10,58%"
+
+
+def test_tabela_custo_de_capital_mesmos_rotulos_do_excel(amb):
+    """A tela usa exatamente os mesmos nomes de item e descrições da aba Custo de Capital."""
+    from wacc_toolkit.saida.rotulos import ROTULOS
+
+    calculo = sv.calcular_projeto(amb, m1._cfg(), excel=False)
+    tabela = sv.tabela_custo_de_capital(calculo.resultado)
+    assert list(tabela["secao"]) == ["KE"] * 12 + ["KD"] * 6 + ["WACC"] * 2
+    assert list(tabela["item"])[:3] == [ROTULOS["rf"], ROTULOS["rm"], ROTULOS["rf_estrutural"]]
+    assert "id" not in tabela.columns
+    # linhas compostas (ERP, beta realavancado, Ke/Kd nominal e real) ficam sem descrição
+    erp = tabela.set_index("item").loc[ROTULOS["erp"]]
+    assert erp["descricao"] == ""
+    rf = tabela.set_index("item").loc[ROTULOS["rf"]]
+    assert rf["descricao"].startswith("T-10 12 meses")
+
+    # o mesmo, a partir do registro salvo em disco (histórico) — sem recalcular
+    import json
+    dados = json.loads(calculo.registro.read_text(encoding="utf-8"))
+    tabela_registro = sv.tabela_custo_de_capital_de_registro(dados)
+    pd_testing_ok = tabela.reset_index(drop=True).equals(tabela_registro.reset_index(drop=True))
+    assert pd_testing_ok
+
+
+def test_series_opcionais_definidas():
+    assert sv.SERIES_OPCIONAIS == {
+        "investing_cds10_brasil", "investing_cds5_brasil", "investing_ibov_mensal", "investing_cds5_brasil_mensal",
+    }
+
+
+def test_linhas_bndes_sem_id_tecnico(amb, repo):
+    import pandas as pd
+
+    m1._gravar(repo, "parametros_manuais", pd.DataFrame({
+        "parametro": ["ir_csll", "bndes_rem_teste"], "valor": [34.0, 1.3], "unidade": "%",
+        "fonte": ["teste", "BNDES Finem: Água, esgoto e resíduos sólidos (página do produto: 'a partir de 1,3% a.a.')"],
+        "verificado_em": "2026-01-01", "responsavel": "", "notas": ""}))
+    linhas = sv.linhas_bndes(amb)
+    assert linhas == {"bndes_rem_teste": "Finem: Água, esgoto e resíduos sólidos (1,30% a.a.)"}

@@ -36,6 +36,15 @@ from openpyxl.workbook.defined_name import DefinedName
 
 from ..calc.modo1 import ResultadoWACC
 from ..calc.registro import versao_codigo
+from .rotulos import COMPOSTOS as _COMPOSTOS
+from .rotulos import KD_ITENS as _KD_ITENS
+from .rotulos import KE_ITENS as _KE_ITENS
+from .rotulos import ROTULOS as _ROTULOS
+from .rotulos import anos_abrev as _anos_abrev
+from .rotulos import desc_param as _desc_param
+from .rotulos import descricoes as _descricoes
+from .rotulos import extrair_versao as _extrair_versao
+from .rotulos import meses_txt as _meses_txt
 
 # ------------------------------------------------------------------ estilos
 NEGRITO = Font(bold=True)
@@ -99,32 +108,6 @@ def _url_para(rec) -> str | None:
 # ------------------------------------------------------------------ utilidades de texto
 def _sanitizar(texto: str) -> str:
     return texto.replace("—", "-").replace("–", "-")
-
-
-def _meses_txt(espec: str) -> str:
-    if espec.endswith("m") and espec[:-1].isdigit():
-        return f"{espec[:-1]} meses"
-    if espec.endswith("a") and espec[:-1].isdigit():
-        return f"{espec[:-1]} anos"
-    return espec
-
-
-def _anos_abrev(espec: str) -> str:
-    if espec.endswith("m") and espec[:-1].isdigit():
-        n = int(espec[:-1])
-        return f"{n // 12}a" if n % 12 == 0 else f"{n}m"
-    if espec.endswith("a") and espec[:-1].isdigit():
-        return f"{espec[:-1]}a"
-    return espec
-
-
-def _desc_param(fonte: str) -> str:
-    if fonte.startswith("Receita Federal"):
-        return "Receita Federal do Brasil"
-    if fonte.startswith("BNDES Finem:"):
-        resto = fonte[len("BNDES Finem:"):].split(" (")[0].strip()
-        return f"Finem - {resto}"
-    return fonte.split(" (")[0]
 
 
 # ------------------------------------------------------------------ helpers de planilha
@@ -233,24 +216,9 @@ def _sheet_basico(wb: Workbook, usados: set[str], nome: str, rec) -> tuple:
 
 
 # ------------------------------------------------------------------ ordem/layout da aba Custo de Capital
-_KE_ITENS = ["rf", "rm", "rf_estrutural", "erp", "risco_brasil", "beta_u", "d_v", "t", "beta_l",
-             "ke_nominal", "inflacao_us", "ke_real"]
-_KD_ITENS = ["tlp", "remuneracao_bndes", "spread_credito", "ipca", "kd_nominal", "kd_real"]
-
-_ROTULOS = {
-    "rf": "Taxa Livre de Riscos (Rf)", "rm": "Risco de Mercado",
-    "rf_estrutural": "Taxa Livre de Riscos Estrutural (R'f)",
-    "erp": "Prêmio de Risco de Mercado (Equity Risk Premium)", "risco_brasil": "Prêmio de Risco Brasil",
-    "beta_u": "Beta desalavancado", "d_v": "D/(D+E)", "t": "T", "beta_l": "Beta re-alavancado",
-    "ke_nominal": "Ke (US$ nominal)", "inflacao_us": "Inflação US$", "ke_real": "Ke (real)",
-    "tlp": "Valor da TLP", "remuneracao_bndes": "Remuneração BNDES", "spread_credito": "Taxa de Risco de Crédito",
-    "ipca": "Taxa de Inflação", "kd_nominal": "Kd (nominal)", "kd_real": "Kd (real)",
-    "wacc_real": "WACC (real)", "wacc_nominal": "WACC (nominal)",
-}
 _FMT_VALOR = {
     "beta_u": "0.00", "d_v": "0.0%", "t": "0.0%", "beta_l": "0.000",
 }
-_COMPOSTOS = {"erp", "beta_l", "ke_nominal", "ke_real", "kd_nominal", "kd_real", "wacc_real", "wacc_nominal"}
 
 
 def _layout_principal() -> dict[str, int]:
@@ -286,6 +254,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     op = cfg.opcoes
     c = resultado.componentes
     n_fases = len(cfg.fases)
+    desc = _descricoes(resultado)  # mesmas descrições exibidas na interface (saida/rotulos.py)
     wb = Workbook()
     wb.remove(wb.active)
     abas_usadas: set[str] = set()
@@ -367,7 +336,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         return f"=AVERAGE('{aba}'!{col}{r0}:{col}{r1})/100"
 
     f_rf = _serie_media("rf")
-    desc_rf = f"T-10 {_meses_txt(op.rf_janela)} ({c['rf'].janela['rotulo']})"
+    desc_rf = desc["rf"]
     _linha("rf", f_rf, desc_rf)
 
     # ---- Rm
@@ -420,15 +389,12 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         return f"=(1+AVERAGE('{aba}'!C{r_ini}:C{r_fim}))^12-1", aba
 
     f_rm, _ = _rm_formula()
-    if "n_anos" in c["rm"].detalhes:
-        desc_rm = f"Média SP500 Retornos Anuais ({c['rm'].janela['rotulo']})"
-    else:
-        desc_rm = f"Média SP500 Ln Mensal ({c['rm'].janela['rotulo']})"
+    desc_rm = desc["rm"]
     _linha("rm", f_rm, desc_rm)
 
     # ---- Rf estrutural
     f_rfe = _serie_media("rf_estrutural")
-    desc_rfe = f"T-10 {_meses_txt(op.rf_estrutural_janela)} ({c['rf_estrutural'].janela['rotulo']})"
+    desc_rfe = desc["rf_estrutural"]
     _linha("rf_estrutural", f_rfe, desc_rfe)
 
     # ---- ERP
@@ -480,7 +446,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
                 f"/_xlfn.STDEV.S('{aba_ntnb}'!{col_ret_ntnb}{rn0}:{col_ret_ntnb}{rn1})/10000")
 
     f_rb = _risco_brasil_formula()
-    desc_rb = f"CDS {_anos_abrev(op.cds_janela)} + Vol. {_anos_abrev(op.vol_janela)} (IBOV-NTNB)"
+    desc_rb = desc["risco_brasil"]
     _linha("risco_brasil", f_rb, desc_rb)
 
     # ---- beta_u / d_v (recortes sempre; fórmula depende de haver bloco de ponderação)
@@ -507,12 +473,9 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         cel.alignment = CENTRO
     aba_de = ws_de.title
 
-    def _extrair_versao(rotulo: str) -> str:
-        return rotulo.split(":")[0].strip().split()[-1]
-
     vb = _extrair_versao(c["beta_u"].rotulo)
     vd = _extrair_versao(c["d_v"].rotulo)
-    desc_beta_dv = f"{cfg.regiao.title()}/{' e '.join(f.setor for f in cfg.fases)}"
+    desc_beta_dv = desc["beta_u"]
 
     if pond:
         _def_nome(wb, "peso_1", f"'Custo de Capital'!${VL}${pond['peso'][0]}")
@@ -532,7 +495,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     # ---- T (entrada editável)
     rec_t = c["t"].recortes[0]
     _sheet_basico(wb, abas_usadas, rec_t.nome, rec_t)
-    desc_t = _desc_param(c["t"].rotulo)
+    desc_t = desc["t"]
     r_t = _linha("t", c["t"].valor, desc_t, editable=True)
     _def_nome(wb, "T", f"'Custo de Capital'!${VL}${r_t}")
 
@@ -573,7 +536,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         return f"=AVERAGE('{aba_tips}'!{col_imp}{r0r}:{col_imp}{r1r})"
 
     f_inf = _inflacao_formula()
-    desc_inf = f"Implícita {_meses_txt(op.inflacao_us_janela)} ({c['inflacao_us'].janela['rotulo']})"
+    desc_inf = desc["inflacao_us"]
     _linha("inflacao_us", f_inf, desc_inf)
 
     # ---- Ke real (total)
@@ -581,18 +544,18 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
 
     # ---- TLP
     f_tlp = _serie_media("tlp")
-    desc_tlp = f"TLP {op.tlp_janela} ({c['tlp'].janela['rotulo']})"
+    desc_tlp = desc["tlp"]
     _linha("tlp", f_tlp, desc_tlp)
 
     # ---- Remuneração BNDES (entrada editável)
     rec_r = c["remuneracao_bndes"].recortes[0]
     _sheet_basico(wb, abas_usadas, rec_r.nome, rec_r)
-    desc_rem = _desc_param(c["remuneracao_bndes"].rotulo)
+    desc_rem = desc["remuneracao_bndes"]
     r_rem = _linha("remuneracao_bndes", c["remuneracao_bndes"].valor, desc_rem, editable=True)
     _def_nome(wb, "remuneracao", f"'Custo de Capital'!${VL}${r_rem}")
 
     # ---- Taxa de risco de crédito (entrada editável)
-    desc_spread = cfg.spread_descricao or "Spread de crédito do projeto"
+    desc_spread = desc["spread_credito"]
     r_spr = _linha("spread_credito", cfg.spread_credito, desc_spread, editable=True)
     _def_nome(wb, "spread", f"'Custo de Capital'!${VL}${r_spr}")
 

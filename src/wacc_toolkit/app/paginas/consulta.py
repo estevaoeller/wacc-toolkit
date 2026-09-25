@@ -8,7 +8,13 @@ import pandas as pd
 import streamlit as st
 
 from wacc_toolkit import servicos as sv
-from wacc_toolkit.app.estado import csv_excel_br, obter_ambiente
+from wacc_toolkit.app.estado import (
+    FORMATO_DATA,
+    csv_excel_br,
+    fmt_data_pt,
+    formatar_df_numerico_pt,
+    obter_ambiente,
+)
 
 st.title("Consulta")
 
@@ -16,16 +22,18 @@ amb = obter_ambiente()
 if amb is None:
     st.stop()
 
-catalogo = sv.fontes()
-if not catalogo:
+status = sv.status_bases(amb)
+if status.empty:
     st.info("Nenhuma fonte cadastrada.")
     st.stop()
 
-opcoes_serie = [(f["fonte"], s) for f in catalogo for s in f["series"]]
-serie_escolhida = st.selectbox(
-    "Série", opcoes_serie, format_func=lambda t: f"{t[0]} / {t[1]}",
-)
-serie = serie_escolhida[1]
+fontes_amigaveis = {f["fonte"]: f["descricao"] for f in sv.fontes()}
+fonte_ids = sorted(status["fonte"].unique())
+fonte_escolhida = st.selectbox("Fonte", fonte_ids, format_func=lambda f: fontes_amigaveis.get(f, f))
+
+series_da_fonte = status.loc[status["fonte"] == fonte_escolhida, ["serie", "descricao"]].set_index("serie")
+serie = st.selectbox("Série", list(series_da_fonte.index),
+                     format_func=lambda s: series_da_fonte.loc[s, "descricao"])
 
 versoes = sv.versoes(amb, serie)
 versao = None
@@ -41,9 +49,9 @@ except FileNotFoundError as e:
 st.subheader("Metadados")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Linhas", meta.get("linhas", len(df)))
-c2.metric("Início", str(meta.get("inicio") or "-"))
-c3.metric("Fim", str(meta.get("fim") or "-"))
-c4.metric("Atualizado em", (meta.get("atualizado_em") or "-")[:10])
+c2.markdown(f"**Início**\n\n{fmt_data_pt(meta.get('inicio'))}")
+c3.markdown(f"**Fim**\n\n{fmt_data_pt(meta.get('fim'))}")
+c4.markdown(f"**Atualizado em**\n\n{fmt_data_pt(meta.get('atualizado_em'))}")
 if meta.get("descricao"):
     st.caption(meta["descricao"] + (f" ({meta['unidade']})" if meta.get("unidade") else ""))
 if meta.get("avisos"):
@@ -57,14 +65,15 @@ if "data" in df.columns:
     minimo, maximo = df["data"].min(), df["data"].max()
     if isinstance(minimo, str):
         minimo, maximo = date.fromisoformat(minimo), date.fromisoformat(maximo)
-    inicio, fim = st.date_input("Intervalo", value=(minimo, maximo), min_value=minimo, max_value=maximo)
+    inicio, fim = st.date_input("Intervalo", value=(minimo, maximo), min_value=minimo, max_value=maximo,
+                                format=FORMATO_DATA)
     recorte = df[(pd.to_datetime(df["data"]) >= pd.Timestamp(inicio)) & (pd.to_datetime(df["data"]) <= pd.Timestamp(fim))]
 
     numericas = [c for c in recorte.columns if c != "data" and pd.api.types.is_numeric_dtype(recorte[c])]
     if numericas:
         coluna = st.selectbox("Coluna do gráfico", numericas, index=0)
         st.line_chart(recorte.set_index("data")[coluna])
-    st.dataframe(recorte, width="stretch")
+    st.dataframe(formatar_df_numerico_pt(recorte, exceto=("data",)), width="stretch", hide_index=True)
 else:
     st.subheader("Tabela")
     busca = st.text_input("Buscar (texto em qualquer coluna)")
@@ -74,7 +83,7 @@ else:
         for c in colunas_texto:
             mascara |= recorte[c].astype(str).str.contains(busca, case=False, na=False)
         recorte = recorte[mascara]
-    st.dataframe(recorte, width="stretch")
+    st.dataframe(formatar_df_numerico_pt(recorte), width="stretch", hide_index=True)
 
 st.download_button(
     "Baixar CSV (Excel, pt-BR)",

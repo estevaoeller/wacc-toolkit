@@ -39,6 +39,22 @@ def test_pagina_bases_carrega(bases_dir):
     assert not at.exception
 
 
+def test_pagina_bases_series_opcionais_sem_alerta(bases_dir):
+    """As bases sintéticas não trazem as variantes opcionais do Investing (diária/_mensal
+    do CDS 5a e o Ibovespa do Investing): devem aparecer como "opcional", sem alerta amarelo."""
+    at = _rodar("bases.py")
+    status = at.dataframe[0].value
+    opcionais = status[status["serie"].isin(sv.SERIES_OPCIONAIS)]
+    assert not opcionais.empty
+    assert (opcionais["situação"] == "opcional (sem dados)").all()
+    obrigatorias_sem_dados = status[~status["serie"].isin(sv.SERIES_OPCIONAIS) & (status["situação"] == "sem dados")]
+    avisos = "\n".join(i.value for i in at.warning)
+    if obrigatorias_sem_dados.empty:
+        assert "sem dados" not in avisos
+    else:
+        assert str(len(obrigatorias_sem_dados)) in avisos
+
+
 def test_pagina_consulta_carrega(bases_dir):
     at = _rodar("consulta.py")
     assert not at.exception
@@ -86,7 +102,7 @@ def test_novo_wacc_calcula_e_aparece_no_historico(bases_dir, repo):
     assert not at.exception
 
     soma = "\n".join([i.value for i in at.success] + [i.value for i in at.error])
-    assert "100.00%" in soma
+    assert "100,00%" in soma
 
     at.button(key="nw_botao_calcular").click()
     at.run()
@@ -99,7 +115,25 @@ def test_novo_wacc_calcula_e_aparece_no_historico(bases_dir, repo):
     at_hist = _rodar("historico.py")
     assert not at_hist.exception
     tabela = at_hist.dataframe[0].value
-    assert "Projeto Teste App" in list(tabela["projeto"])
+    assert "Projeto Teste App" in list(tabela["Projeto"])
+
+
+def test_novo_wacc_nome_arquivo_preenchido_ao_carregar(bases_dir):
+    """Ao carregar um projeto salvo, o campo 'Nome do arquivo' vem com o nome do arquivo
+    carregado (não com um valor genérico)."""
+    amb = sv.ambiente(bases_dir)
+    cfg = m1._cfg(projeto="Santa Maria")
+    sv.salvar_projeto(amb, cfg, "santa_maria_2026-07")
+
+    [caminho] = sv.listar_projetos(amb)
+    at = _rodar("novo_wacc.py")
+    carregar = next(s for s in at.selectbox if s.label == "Carregar projeto existente")
+    carregar.select(caminho)
+    at.run()
+    assert not at.exception
+
+    nome_arquivo = next(t for t in at.text_input if t.label == "Nome do arquivo")
+    assert nome_arquivo.value == "santa_maria_2026-07"
 
 
 def test_novo_wacc_pesos_diferentes_de_100_bloqueia_calculo(bases_dir):
@@ -112,3 +146,24 @@ def test_novo_wacc_pesos_diferentes_de_100_bloqueia_calculo(bases_dir):
     erros = "\n".join(i.value for i in at.error)
     assert "100%" in erros
     assert at.button(key="nw_botao_calcular").disabled
+
+
+def _todos_os_textos(at: AppTest) -> list[str]:
+    """Todo texto renderizado que dá para inspecionar via AppTest: títulos, textos soltos,
+    mensagens de status e o conteúdo (em string) de cada dataframe/tabela."""
+    textos = []
+    for grupo in (at.title, at.header, at.subheader, at.markdown, at.caption, at.text,
+                 at.error, at.warning, at.success, at.info):
+        textos += [i.value for i in grupo]
+    textos += [f"{m.label} {m.value}" for m in at.metric]
+    for d in at.dataframe:
+        textos.append(d.value.to_string())
+    return textos
+
+
+@pytest.mark.parametrize("pagina", ["bases.py", "consulta.py", "novo_wacc.py", "historico.py"])
+def test_nenhum_travessao_na_interface(bases_dir, pagina):
+    at = _rodar(pagina)
+    assert not at.exception
+    for texto in _todos_os_textos(at):
+        assert "—" not in texto, f"{pagina}: travessão encontrado em {texto!r}"

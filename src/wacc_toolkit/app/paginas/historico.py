@@ -5,7 +5,13 @@ from __future__ import annotations
 import streamlit as st
 
 from wacc_toolkit import servicos as sv
-from wacc_toolkit.app.estado import fmt_pct, formatar_valor, obter_ambiente
+from wacc_toolkit.app.estado import (
+    fmt_datahora_local_pt,
+    fmt_mes_ano_pt,
+    fmt_num_sinal_pt,
+    fmt_pct,
+    obter_ambiente,
+)
 
 st.title("Histórico")
 
@@ -20,10 +26,15 @@ if lista.empty:
 
 st.subheader("Cálculos")
 exibicao = lista.copy()
+exibicao["data_base"] = exibicao["data_base"].map(fmt_mes_ano_pt)
+exibicao["gerado_em"] = exibicao["gerado_em"].map(fmt_datahora_local_pt)
 exibicao["wacc_real"] = exibicao["wacc_real"].map(lambda v: fmt_pct(v, 2))
 exibicao["wacc_nominal"] = exibicao["wacc_nominal"].map(lambda v: fmt_pct(v, 2))
 st.dataframe(
-    exibicao[["projeto", "data_base", "gerado_em", "wacc_real", "wacc_nominal"]], width="stretch", hide_index=True,
+    exibicao[["projeto", "data_base", "gerado_em", "wacc_real", "wacc_nominal"]]
+    .rename(columns={"projeto": "Projeto", "data_base": "Data-base", "gerado_em": "Gerado em",
+                     "wacc_real": "WACC real", "wacc_nominal": "WACC nominal"}),
+    width="stretch", hide_index=True,
 )
 
 st.subheader("Detalhe de um cálculo")
@@ -31,10 +42,15 @@ arquivo = st.selectbox("Cálculo", lista["arquivo"], format_func=lambda a: a,
                        key="hist_detalhe")
 if arquivo:
     dados = sv.ler_calculo(amb, arquivo)
-    componentes = dados.get("componentes", {})
-    linhas = [{"id": k, "item": v.get("nome", k), "valor": formatar_valor(k, v.get("valor")),
-              "descrição": v.get("rotulo", "")} for k, v in componentes.items()]
-    st.dataframe(linhas, width="stretch", hide_index=True)
+    cfg = dados.get("config", {})
+    st.caption(f"{cfg.get('projeto', '')} - data-base {fmt_mes_ano_pt(cfg.get('data_base'))} "
+              f"- gerado em {fmt_datahora_local_pt(dados.get('gerado_em'))}")
+    tabela = sv.tabela_custo_de_capital_de_registro(dados)
+    for secao in ("KE", "KD", "WACC"):
+        st.markdown(f"**{secao}**")
+        linhas = tabela.loc[tabela["secao"] == secao, ["item", "valor", "descricao"]]
+        st.dataframe(linhas.rename(columns={"item": "Item", "valor": "Valor", "descricao": "Descrição"}),
+                    width="stretch", hide_index=True)
     excel = amb.calculos / arquivo
     excel = excel.with_suffix(".xlsx")
     if excel.exists():
@@ -61,6 +77,6 @@ if a and b:
         return [cor] * len(linha)
 
     st.dataframe(
-        tabela.style.apply(_destacar_maior_variacao, axis=1).format({"Diferença (p.b.)": "{:+.2f}"}),
+        tabela.style.apply(_destacar_maior_variacao, axis=1).format({"Diferença (p.b.)": fmt_num_sinal_pt}),
         width="stretch", hide_index=True,
     )

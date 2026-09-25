@@ -21,14 +21,22 @@ status = sv.status_bases(amb)
 if status.empty:
     st.info("Nenhuma fonte cadastrada.")
 else:
-    sem_dados = status["linhas"].fillna(0) == 0
+    sem_linhas = status["linhas"].fillna(0) == 0
+    opcional = status["serie"].isin(sv.SERIES_OPCIONAIS)
+    obrigatoria_sem_dados = sem_linhas & ~opcional
+
+    status = status.copy()
+    status["situação"] = ""
+    status.loc[sem_linhas & opcional, "situação"] = "opcional (sem dados)"
+    status.loc[obrigatoria_sem_dados, "situação"] = "sem dados"
 
     def _destacar_sem_dados(linha):
-        return ["background-color: #4d2020" if sem_dados.loc[linha.name] else "" for _ in linha]
+        cor = "background-color: #4d2020" if obrigatoria_sem_dados.loc[linha.name] else ""
+        return [cor for _ in linha]
 
-    st.dataframe(status.style.apply(_destacar_sem_dados, axis=1), width="stretch")
-    if sem_dados.any():
-        st.warning(f"{int(sem_dados.sum())} série(s) sem dados (destacadas acima).")
+    st.dataframe(status.style.apply(_destacar_sem_dados, axis=1), width="stretch", hide_index=True)
+    if obrigatoria_sem_dados.any():
+        st.warning(f"{int(obrigatoria_sem_dados.sum())} série(s) obrigatória(s) sem dados (destacadas acima).")
 
 # ------------------------------------------------------------------ atualização automática
 st.subheader("Atualizar bases automáticas")
@@ -38,7 +46,7 @@ with col1:
         with st.spinner("Coletando..."):
             resultados = sv.atualizar(amb)
         for r in resultados:
-            titulo = f"{r.fonte}: {r.status}" + (f" — {r.erro}" if r.erro else "")
+            titulo = f"{r.fonte}: {r.status}" + (f" ({r.erro})" if r.erro else "")
             (st.success if r.status in ("ok", "sem_novidade") else st.error)(titulo)
             for s in r.series:
                 v = f" v{s.versao}" if s.versao else ""
@@ -54,7 +62,7 @@ with col2:
     if alvo and st.button(f"Atualizar '{alvo}'"):
         with st.spinner(f"Coletando {alvo}..."):
             [resultado] = sv.atualizar(amb, [alvo])
-        titulo = f"{resultado.fonte}: {resultado.status}" + (f" — {resultado.erro}" if resultado.erro else "")
+        titulo = f"{resultado.fonte}: {resultado.status}" + (f" ({resultado.erro})" if resultado.erro else "")
         (st.success if resultado.status in ("ok", "sem_novidade") else st.error)(titulo)
         for s in resultado.series:
             st.write(f"　{s.serie}: {s.status}, {s.linhas} linhas, fim {s.fim}")
@@ -80,7 +88,7 @@ if arquivos_investing and st.button("Importar arquivos do Investing.com"):
         st.error(str(e))
     else:
         (st.success if resultado.status in ("ok", "sem_novidade") else st.error)(
-            f"investing: {resultado.status}" + (f" — {resultado.erro}" if resultado.erro else ""))
+            f"investing: {resultado.status}" + (f" ({resultado.erro})" if resultado.erro else ""))
         for s in resultado.series:
             st.write(f"　{s.serie}: {s.status}, {s.linhas} linhas, fim {s.fim}")
             for p in s.problemas:
@@ -97,7 +105,7 @@ if arquivo_parametros and st.button("Importar parâmetros"):
         st.error(str(e))
     else:
         (st.success if resultado.status in ("ok", "sem_novidade") else st.error)(
-            f"parametros: {resultado.status}" + (f" — {resultado.erro}" if resultado.erro else ""))
+            f"parametros: {resultado.status}" + (f" ({resultado.erro})" if resultado.erro else ""))
         for s in resultado.series:
             st.write(f"　{s.serie}: {s.status}, {s.linhas} linhas, fim {s.fim}")
             for p in s.problemas:
@@ -106,7 +114,7 @@ if arquivo_parametros and st.button("Importar parâmetros"):
 st.markdown("Parâmetros vigentes:")
 try:
     df_param, _ = sv.ler_serie(amb, "parametros_manuais")
-    st.dataframe(df_param, width="stretch")
+    st.dataframe(df_param, width="stretch", hide_index=True)
 except FileNotFoundError:
     st.info("Ainda não há parâmetros manuais gravados.")
 
@@ -114,6 +122,6 @@ except FileNotFoundError:
 st.subheader("Últimas falhas")
 falhas = sv.ultimas_falhas(amb)
 if falhas:
-    st.table(falhas)
+    st.dataframe(falhas, width="stretch", hide_index=True)
 else:
     st.caption("Nenhuma falha registrada.")
