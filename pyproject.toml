@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pywin32>=306; sys_platform == 'win32'"]
 
 [project.scripts]
 wacc = "wacc_toolkit.cli:main"
@@ -26,5 +26,8 @@ packages = ["src/wacc_toolkit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["online: testes que acessam a internet (rodar com -m online)"]
+markers = [
+    "online: testes que acessam a internet (rodar com -m online)",
+    "excel: testes que recalculam via Excel (COM); pulados se o Excel não estiver disponível",
+]
 addopts = "-m 'not online'"
