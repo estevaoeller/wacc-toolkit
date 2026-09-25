@@ -79,7 +79,11 @@ class ConfigProjeto:
 
     @classmethod
     def de_toml(cls, caminho: str | Path) -> "ConfigProjeto":
-        d = tomllib.loads(Path(caminho).read_text(encoding="utf-8"))
+        return cls.de_toml_texto(Path(caminho).read_text(encoding="utf-8"))
+
+    @classmethod
+    def de_toml_texto(cls, texto: str) -> "ConfigProjeto":
+        d = tomllib.loads(texto)
         return cls(
             projeto=d["projeto"],
             data_base=d["data_base"] if isinstance(d["data_base"], date) else date.fromisoformat(d["data_base"]),
