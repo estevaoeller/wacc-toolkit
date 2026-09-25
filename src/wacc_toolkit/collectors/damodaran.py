@@ -1,4 +1,4 @@
-"""Damodaran (NYU Stern) — betas, fundamentos de dívida, risco-país e retornos históricos.
+"""Damodaran (NYU Stern): betas, fundamentos de dívida, risco-país e retornos históricos.
 
 Fonte: planilhas anuais publicadas em
 https://pages.stern.nyu.edu/~adamodar/pc/datasets/<arquivo>
@@ -7,19 +7,19 @@ Cada planilha é substituída inteiramente a cada atualização anual (normalmen
 janeiro). Por isso as séries são **versionadas** (``SerieSpec.versionada=True``):
 cada edição vira ``tratado/<serie>/<versao>.csv`` e a edição anterior nunca é
 sobrescrita. A versão é o ano de publicação, extraído da célula "Date updated"/
-"Date of update" presente no topo de cada planilha — nunca a data de hoje. Se essa
+"Date of update" presente no topo de cada planilha: nunca a data de hoje. Se essa
 célula não puder ser localizada, ``interpretar`` falha com ``ValueError`` (regra 9 do
 contrato: nunca chutar a versão).
 
 Origens de coleta (``coletar``):
-  (a) web — download direto das URLs fixas acima;
-  (b) importação local — arquivos com o mesmo nome colocados em
+  (a) web: download direto das URLs fixas acima;
+  (b) importação local: arquivos com o mesmo nome colocados em
       ``entrada/damodaran/<qualquer subpasta>/`` (ex.: ``entrada/damodaran/2026/
       betaGlobal.xls``), útil para versões baixadas manualmente. O rótulo
       (``ArquivoBruto.rotulo``) é o mesmo nos dois casos (nome do arquivo sem
       extensão), então o núcleo deduplica automaticamente pelo sha256 do conteúdo.
       Se web e entrada trouxerem a mesma versão com conteúdos diferentes, a série
-      dessa versão é regravada e ``validate`` emite aviso de "histórico revisado" —
+      dessa versão é regravada e ``validate`` emite aviso de "histórico revisado" -
       isso é aceitável e esperado (ex.: Damodaran corrige a planilha após publicar).
 Falha de download de um arquivo (ex.: 404, rate limit) não interrompe os demais:
 é capturada e registrada via ``logging.getLogger("wacc_toolkit").warning``.
@@ -34,7 +34,7 @@ por índice fixo, para tolerar pequenos deslocamentos entre edições):
   (Industry Name .. Unlevered beta corrected for cash). As colunas seguintes
   ("HiLo Risk", desvios-padrão, betas anuais por ano civil) mudam de nome e de
   quantidade a cada edição (ex.: "2022,2023,2024,2025,Average(2020-24)" vira outro
-  intervalo no ano seguinte) — não são incluídas por não serem reproduzíveis de
+  intervalo no ano seguinte): não são incluídas por não serem reproduzíveis de
   forma estável ano a ano.
 - ``damodaran_totalbeta_global`` (``totalbetaGlobal.xls``, aba "Industry
   Averages"): "Total Beta by Industry Sector" citado na Metodologia do Tesouro.
@@ -47,7 +47,7 @@ por índice fixo, para tolerar pequenos deslocamentos entre edições):
 - ``damodaran_ctryprem`` (``ctryprem.xlsx``, aba "ERPs by country"): a segunda
   coluna da tabela real é a região (ex.: "Middle East"), mas o cabeçalho da
   planilha traz nela, por erro do autor, o nome do primeiro valor ("Africa") em
-  vez de "Region" — por isso as colunas são nomeadas explicitamente por posição,
+  vez de "Region": por isso as colunas são nomeadas explicitamente por posição,
   não pelo texto do cabeçalho. A aba tem uma segunda tabela solta abaixo
   ("Frontier Markets (no sovereign ratings)", com colunas diferentes) que é
   descartada: a leitura para quando a coluna de região fica vazia, o que marca o
@@ -57,7 +57,7 @@ por índice fixo, para tolerar pequenos deslocamentos entre edições):
   resumo no final da tabela ("Arithmetic Average...", "1928-2025" etc.) são
   descartadas pelo filtro "Year é um ano de 4 dígitos".
 
-Unidade: os valores são preservados exatamente como a fonte publica — a maioria
+Unidade: os valores são preservados exatamente como a fonte publica: a maioria
 já vem como fração decimal (ex.: 0.0425 representa 4,25% a.a.); nenhuma conversão
 percentual é feita aqui.
 """
@@ -124,10 +124,10 @@ def _ler_planilha(caminho: Path, aba: str) -> pd.DataFrame:
 
 def extrair_versao(df0: pd.DataFrame) -> str:
     """Procura, nas primeiras linhas, uma célula da coluna A contendo "date"
-    (case-insensitive — cobre "Date updated:" e "Date of update:") e devolve o
+    (case-insensitive: cobre "Date updated:" e "Date of update:") e devolve o
     ano da primeira data encontrada na mesma linha, como string "AAAA".
 
-    Levanta ``ValueError`` se não encontrar — nunca usamos a data de hoje como
+    Levanta ``ValueError`` se não encontrar: nunca usamos a data de hoje como
     substituto, para não gravar uma versão errada silenciosamente."""
     limite = min(15, len(df0))
     for i in range(limite):
@@ -223,7 +223,7 @@ def interpretar_arquivo(conteudo: bytes, rotulo: str) -> tuple[str, pd.DataFrame
         df = _parse_ctryprem(df0, header_idx)
     elif rotulo == "histretSP":
         df = _parse_histretsp(df0, header_idx)
-    else:  # pragma: no cover — não deveria acontecer, _ARQUIVOS é fechado
+    else:  # pragma: no cover: não deveria acontecer, _ARQUIVOS é fechado
         raise ValueError(f"damodaran: rótulo desconhecido {rotulo!r}")
     return versao, df
 
@@ -232,12 +232,12 @@ def interpretar_arquivo(conteudo: bytes, rotulo: str) -> tuple[str, pd.DataFrame
 class Damodaran(Coletor):
     fonte = "damodaran"
     descricao = (
-        "Damodaran (NYU Stern) — betas por setor, fundamentos de dívida, "
+        "Damodaran (NYU Stern): betas por setor, fundamentos de dívida, "
         "prêmio de risco-país e retornos históricos S&P/T-Bond (edições anuais)"
     )
     series = (
         SerieSpec(
-            id="damodaran_beta_global", descricao="Beta por setor — empresas globais (ex-EUA)",
+            id="damodaran_beta_global", descricao="Beta por setor: empresas globais (ex-EUA)",
             unidade="adimensional (beta, D/E) e fração 0-1 (tax rate, cash/firm value)",
             frequencia="V", colunas=_COLUNAS_BETA_SETOR, chave=("industry_name",),
             valores=("beta", "de_ratio", "effective_tax_rate", "unlevered_beta",
@@ -245,7 +245,7 @@ class Damodaran(Coletor):
             faixa=(-1.0, 10.0), versionada=True,
         ),
         SerieSpec(
-            id="damodaran_beta_emerg", descricao="Beta por setor — mercados emergentes",
+            id="damodaran_beta_emerg", descricao="Beta por setor: mercados emergentes",
             unidade="adimensional (beta, D/E) e fração 0-1 (tax rate, cash/firm value)",
             frequencia="V", colunas=_COLUNAS_BETA_SETOR, chave=("industry_name",),
             valores=("beta", "de_ratio", "effective_tax_rate", "unlevered_beta",
@@ -253,7 +253,7 @@ class Damodaran(Coletor):
             faixa=(-1.0, 10.0), versionada=True,
         ),
         SerieSpec(
-            id="damodaran_beta_us", descricao="Beta por setor — empresas dos EUA",
+            id="damodaran_beta_us", descricao="Beta por setor: empresas dos EUA",
             unidade="adimensional (beta, D/E) e fração 0-1 (tax rate, cash/firm value)",
             frequencia="V", colunas=_COLUNAS_BETA_SETOR, chave=("industry_name",),
             valores=("beta", "de_ratio", "effective_tax_rate", "unlevered_beta",
@@ -269,7 +269,7 @@ class Damodaran(Coletor):
             faixa=(-2.0, 15.0), versionada=True,
         ),
         SerieSpec(
-            id="damodaran_dbtfund_global", descricao="Fundamentos de dívida por setor — global",
+            id="damodaran_dbtfund_global", descricao="Fundamentos de dívida por setor: global",
             unidade="fração 0-1 (endividamento, tax rate) e razões (ver notas)",
             frequencia="V", colunas=_COLUNAS_DBTFUND, chave=("industry_name",),
             valores=_COLUNAS_DBTFUND[2:], faixa=None, versionada=True,
@@ -278,7 +278,7 @@ class Damodaran(Coletor):
                   "junto das demais colunas em fração 0-1.",
         ),
         SerieSpec(
-            id="damodaran_dbtfund_emerg", descricao="Fundamentos de dívida por setor — mercados emergentes",
+            id="damodaran_dbtfund_emerg", descricao="Fundamentos de dívida por setor: mercados emergentes",
             unidade="fração 0-1 (endividamento, tax rate) e razões (ver notas)",
             frequencia="V", colunas=_COLUNAS_DBTFUND, chave=("industry_name",),
             valores=_COLUNAS_DBTFUND[2:], faixa=None, versionada=True,
@@ -313,7 +313,7 @@ class Damodaran(Coletor):
             try:
                 r = baixar(ctx.sessao, url)
                 out.append(ArquivoBruto(r.content, ext, url=url, nome_original=arquivo_nome, rotulo=rotulo))
-            except Exception as e:  # noqa: BLE001 — uma fonte fora do ar não derruba as demais
+            except Exception as e:  # noqa: BLE001: uma fonte fora do ar não derruba as demais
                 log.warning("damodaran: falha ao baixar %s: %r", arquivo_nome, e)
         return out
 

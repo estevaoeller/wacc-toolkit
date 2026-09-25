@@ -1,0 +1,84 @@
+"""Página Consulta: exploração de uma série tratada, com gráfico, tabela e download."""
+
+from __future__ import annotations
+
+from datetime import date
+
+import pandas as pd
+import streamlit as st
+
+from wacc_toolkit import servicos as sv
+from wacc_toolkit.app.estado import csv_excel_br, obter_ambiente
+
+st.title("Consulta")
+
+amb = obter_ambiente()
+if amb is None:
+    st.stop()
+
+catalogo = sv.fontes()
+if not catalogo:
+    st.info("Nenhuma fonte cadastrada.")
+    st.stop()
+
+opcoes_serie = [(f["fonte"], s) for f in catalogo for s in f["series"]]
+serie_escolhida = st.selectbox(
+    "Série", opcoes_serie, format_func=lambda t: f"{t[0]} / {t[1]}",
+)
+serie = serie_escolhida[1]
+
+versoes = sv.versoes(amb, serie)
+versao = None
+if versoes:
+    versao = st.selectbox("Versão", versoes, index=len(versoes) - 1)
+
+try:
+    df, meta = sv.ler_serie(amb, serie, versao)
+except FileNotFoundError as e:
+    st.error(str(e))
+    st.stop()
+
+st.subheader("Metadados")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Linhas", meta.get("linhas", len(df)))
+c2.metric("Início", str(meta.get("inicio") or "-"))
+c3.metric("Fim", str(meta.get("fim") or "-"))
+c4.metric("Atualizado em", (meta.get("atualizado_em") or "-")[:10])
+if meta.get("descricao"):
+    st.caption(meta["descricao"] + (f" ({meta['unidade']})" if meta.get("unidade") else ""))
+if meta.get("avisos"):
+    with st.expander(f"{len(meta['avisos'])} aviso(s)"):
+        for a in meta["avisos"]:
+            st.warning(a)
+
+recorte = df
+if "data" in df.columns:
+    st.subheader("Período")
+    minimo, maximo = df["data"].min(), df["data"].max()
+    if isinstance(minimo, str):
+        minimo, maximo = date.fromisoformat(minimo), date.fromisoformat(maximo)
+    inicio, fim = st.date_input("Intervalo", value=(minimo, maximo), min_value=minimo, max_value=maximo)
+    recorte = df[(pd.to_datetime(df["data"]) >= pd.Timestamp(inicio)) & (pd.to_datetime(df["data"]) <= pd.Timestamp(fim))]
+
+    numericas = [c for c in recorte.columns if c != "data" and pd.api.types.is_numeric_dtype(recorte[c])]
+    if numericas:
+        coluna = st.selectbox("Coluna do gráfico", numericas, index=0)
+        st.line_chart(recorte.set_index("data")[coluna])
+    st.dataframe(recorte, width="stretch")
+else:
+    st.subheader("Tabela")
+    busca = st.text_input("Buscar (texto em qualquer coluna)")
+    if busca:
+        colunas_texto = recorte.select_dtypes(include="object").columns
+        mascara = pd.Series(False, index=recorte.index)
+        for c in colunas_texto:
+            mascara |= recorte[c].astype(str).str.contains(busca, case=False, na=False)
+        recorte = recorte[mascara]
+    st.dataframe(recorte, width="stretch")
+
+st.download_button(
+    "Baixar CSV (Excel, pt-BR)",
+    data=csv_excel_br(recorte),
+    file_name=f"{serie}{'_' + versao if versao else ''}.csv",
+    mime="text/csv",
+)

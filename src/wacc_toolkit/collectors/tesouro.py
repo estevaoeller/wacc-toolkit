@@ -1,4 +1,4 @@
-"""Tesouro Transparente (CKAN) — Taxas dos títulos ofertados pelo Tesouro Direto.
+"""Tesouro Transparente (CKAN): Taxas dos títulos ofertados pelo Tesouro Direto.
 
 Série (painel único, todos os títulos; o filtro de NTN-B/IPCA+ é do motor de cálculo):
 - tesouro_td_taxas  diária  taxas de compra/venda e PUs de todos os títulos do Tesouro Direto
@@ -10,7 +10,7 @@ resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/precotaxatesourodireto.cs
 Layout do CSV (verificado em 2026-09-25 baixando o arquivo real):
 - separador ``;``, decimal ``,``, sem separador de milhar;
 - encoding ASCII puro (subconjunto de UTF-8 e latin-1: os nomes dos títulos não têm
-  acento — "Educa+", "IPCA+", "IGPM+", "Prefixado", "Selic", "Renda+ Aposentadoria Extra");
+  acento: "Educa+", "IPCA+", "IGPM+", "Prefixado", "Selic", "Renda+ Aposentadoria Extra");
 - colunas: ``Tipo Titulo;Data Vencimento;Data Base;Taxa Compra Manha;Taxa Venda Manha;
   PU Compra Manha;PU Venda Manha;PU Base Manha``;
 - datas em ``dd/mm/aaaa``;
@@ -18,13 +18,13 @@ Layout do CSV (verificado em 2026-09-25 baixando o arquivo real):
 
 Faixa das taxas: no histórico completo (baixado em 2026-09-25) a Taxa Compra Manha varia
 de -3,53 a 20,10 e a Taxa Venda Manha de -3,41 a 20,13 (% a.a.). Taxas negativas são reais
-e legítimas — ocorrem sobretudo na Tesouro Selic em janelas de juros básicos muito baixos
+e legítimas: ocorrem sobretudo na Tesouro Selic em janelas de juros básicos muito baixos
 (ágio sobre a Selic). Não há valores vazios/nulos nessas colunas no arquivo completo.
 A faixa (-5, 40) do contrato dá margem confortável sem deixar de capturar erro grosseiro
 de parsing (ex.: vírgula decimal virando 457 em vez de 4,57).
 
 Duplicatas na chave (data, titulo, vencimento): investigado no arquivo completo (176622
-linhas, baixado em 2026-09-25) — não há nenhuma linha duplicada nessa chave hoje. Como o
+linhas, baixado em 2026-09-25): não há nenhuma linha duplicada nessa chave hoje. Como o
 CKAN pode publicar uma nova versão do CSV com registros corrigidos/repetidos em outra
 coleta futura, tratamos isso de forma determinística mesmo assim: ordenamos pela ordem
 original do arquivo e, ao encontrar chave repetida, mantemos a ÚLTIMA ocorrência (a mais
@@ -115,7 +115,7 @@ def interpretar_csv(conteudo: bytes) -> pd.DataFrame:
 @registrar
 class Tesouro(Coletor):
     fonte = "tesouro"
-    descricao = "Tesouro Transparente — taxas e PUs de todos os títulos do Tesouro Direto"
+    descricao = "Tesouro Transparente: taxas e PUs de todos os títulos do Tesouro Direto"
     series = (
         SerieSpec(
             id="tesouro_td_taxas",

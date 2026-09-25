@@ -1,4 +1,4 @@
-"""Yahoo Finance — S&P 500 Total Return e Ibovespa via endpoint não oficial de gráfico.
+"""Yahoo Finance: S&P 500 Total Return e Ibovespa via endpoint não oficial de gráfico.
 
 Endpoint (não documentado, mas estável e usado pelo yfinance por baixo dos panos):
     https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?period1=0&period2=<agora>&interval=1d&events=div,split
@@ -50,7 +50,7 @@ _TICKERS = {
     # faixa: o pedido original especificava (100, 1_000_000), mas os primeiros ~90
     # pregões que o Yahoo tem para ^BVSP (1993-04-27 a 1993-08-31, ainda no regime de
     # cruzeiro/cruzeiro real, antes do Plano Real "cortar zeros" do índice) ficam entre
-    # 23,7 e 99,8 pontos — abaixo de 100. Para não rejeitar a série inteira por causa
+    # 23,7 e 99,8 pontos: abaixo de 100. Para não rejeitar a série inteira por causa
     # desses ~90 pontos legítimos, o piso foi ajustado para 20. O teto permanece o
     # solicitado.
     "^BVSP": ("yahoo_ibov", "Ibovespa, diária", (20.0, 1000000.0), 15, "BVSP"),
@@ -127,7 +127,7 @@ def interpretar_chart_json(conteudo: bytes, esperado_ticker: str) -> pd.DataFram
 @registrar
 class Yahoo(Coletor):
     fonte = "yahoo"
-    descricao = "Yahoo Finance — S&P 500 Total Return (^SP500TR) e Ibovespa (^BVSP), diárias"
+    descricao = "Yahoo Finance: S&P 500 Total Return (^SP500TR) e Ibovespa (^BVSP), diárias"
     series = tuple(
         SerieSpec(
             id=sid,

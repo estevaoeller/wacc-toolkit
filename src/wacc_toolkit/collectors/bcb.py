@@ -1,10 +1,10 @@
-"""BCB (Banco Central do Brasil) — TLP e Focus.
+"""BCB (Banco Central do Brasil): TLP e Focus.
 
 Implementação do contrato de coletor para séries do Banco Central do Brasil.
 
 Séries (valores em % a.a., como publicados):
-- bcb_tlp: TLP — Taxa de Longo Prazo, série SGS 27572 (mensal)
-- bcb_focus_ipca_anual: Focus — Expectativas de IPCA (mediana anual)
+- bcb_tlp: TLP: Taxa de Longo Prazo, série SGS 27572 (mensal)
+- bcb_focus_ipca_anual: Focus: Expectativas de IPCA (mediana anual)
 
 Endpoint públicos, sem chave:
 - TLP: https://api.bcb.gov.br/dados/serie/bcdata.sgs.27572/dados?formato=json
@@ -56,7 +56,7 @@ def interpretar_tlp(conteudo: bytes) -> pd.DataFrame:
 
 
 def interpretar_focus(conteudo: bytes) -> pd.DataFrame:
-    """Parse JSON do Focus — Expectativas de IPCA anual.
+    """Parse JSON do Focus: Expectativas de IPCA anual.
 
     Formato: {"value": [{"Indicador":"IPCA","Data":"2018-01-22","DataReferencia":"2019", ...}, ...]}
 
@@ -104,11 +104,11 @@ def interpretar_focus(conteudo: bytes) -> pd.DataFrame:
 @registrar
 class BCB(Coletor):
     fonte = "bcb"
-    descricao = "BCB — TLP (Taxa de Longo Prazo) e Focus (Expectativas de IPCA)"
+    descricao = "BCB: TLP (Taxa de Longo Prazo) e Focus (Expectativas de IPCA)"
     series = (
         SerieSpec(
             id="bcb_tlp",
-            descricao="TLP — Taxa de Longo Prazo para cálculo da TNLP (série SGS 27572), mensal",
+            descricao="TLP: Taxa de Longo Prazo para cálculo da TNLP (série SGS 27572), mensal",
             unidade="% a.a.",
             frequencia="M",
             faixa=(0.0, 30.0),
@@ -116,7 +116,7 @@ class BCB(Coletor):
         ),
         SerieSpec(
             id="bcb_focus_ipca_anual",
-            descricao="Focus — Expectativas de IPCA para o ano (mediana), por data de coleta",
+            descricao="Focus: Expectativas de IPCA para o ano (mediana), por data de coleta",
             unidade="% a.a.",
             frequencia="D",  # diária, pois há múltiplos registros por data (por ano_referencia e base_calculo)
             colunas=("data", "ano_referencia", "base_calculo", "mediana", "media",

@@ -1,4 +1,4 @@
-"""B3 — Ibovespa oficial, via endpoint não documentado de estatísticas de índice.
+"""B3: Ibovespa oficial, via endpoint não documentado de estatísticas de índice.
 
 Endpoint (não documentado, mas verificado funcionando em 2026-09):
     https://sistemaswebb3-listados.b3.com.br/indexStatisticsProxy/IndexCall/GetPortfolioDay/{token}
@@ -88,7 +88,7 @@ def interpretar_b3_json(conteudo: bytes, ano: int) -> pd.DataFrame:
 @registrar
 class B3(Coletor):
     fonte = "b3"
-    descricao = "B3 — Ibovespa oficial, fechamento diário por ano (GetPortfolioDay)"
+    descricao = "B3: Ibovespa oficial, fechamento diário por ano (GetPortfolioDay)"
     series = (
         SerieSpec(
             id="b3_ibov",

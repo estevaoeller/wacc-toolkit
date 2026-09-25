@@ -1,12 +1,12 @@
-"""Investing.com — CDS Brasil (5 e 10 anos) e Ibovespa. Coleta MANUAL.
+"""Investing.com: CDS Brasil (5 e 10 anos) e Ibovespa. Coleta MANUAL.
 
 O CDS soberano do Brasil (5 e 10 anos) só está disponível, de forma acessível, no
-Investing.com — que bloqueia acesso automatizado (robôs). Por isso esta fonte é
+Investing.com: que bloqueia acesso automatizado (robôs). Por isso esta fonte é
 ``manual = True``: o usuário baixa, pelo site, o CSV "Dados Históricos" de cada
 instrumento e copia o arquivo para ``<bases>/entrada/investing/`` (pode usar
 subpastas; a busca é recursiva). A cada coleta, ``coletar()`` relê *todos* os
-``*.csv`` presentes nessa pasta — os arquivos não são removidos depois de
-processados — e ``interpretar()`` reconstrói a série a partir de todos eles.
+``*.csv`` presentes nessa pasta: os arquivos não são removidos depois de
+processados: e ``interpretar()`` reconstrói a série a partir de todos eles.
 
 Formato esperado do CSV (exportação em português do Investing.com):
 colunas ``"Data","Último","Abertura","Máxima","Mínima","Vol.","Var%"``,
@@ -15,7 +15,7 @@ BOM UTF-8 e aspas envolvendo os campos. Apenas ``Data``, ``Último``,
 ``Abertura``, ``Máxima`` e ``Mínima`` são usados; ``Vol.`` (sufixos K/M/B) e
 ``Var%`` são ignorados.
 
-Convenção de nomes de arquivo (é assim que a série é identificada — o
+Convenção de nomes de arquivo (é assim que a série é identificada: o
 conteúdo do CSV não traz o nome do instrumento):
 
 - token ``cds10`` (fundido) ou token ``cds`` seguido de perto por um token ``10``
@@ -29,7 +29,7 @@ checagem de substring no nome inteiro).
 
 Ex.: ``Dados Históricos - CDS Brasil 10 anos (2501 2509).csv``,
 ``cds5_2025.csv``, ``Dados Históricos - Ibovespa.csv``. Arquivos cujo nome não
-bate com nenhum desses padrões são ignorados (aviso no log) — não é possível
+bate com nenhum desses padrões são ignorados (aviso no log): não é possível
 adivinhar a série pelo conteúdo, então um nome fora do padrão não interrompe a
 coleta dos demais arquivos.
 
@@ -41,8 +41,8 @@ Cada arquivo do Investing.com cobre só uma janela de datas (o usuário baixa
 recortes), por isso as três séries usam ``modo="acumular"``: o núcleo mescla o
 que vier nesta coleta com o que já estava salvo. Quando, numa mesma coleta,
 chegam vários arquivos da mesma série com datas sobrepostas, eles são
-concatenados em ordem de "chegada" — ``st_mtime`` do bruto já gravado e, em
-empate, nome do arquivo — e a data repetida fica com o valor do arquivo mais
+concatenados em ordem de "chegada": ``st_mtime`` do bruto já gravado e, em
+empate, nome do arquivo: e a data repetida fica com o valor do arquivo mais
 recente nessa ordem (é o comportamento de ``drop_duplicates(keep="last")``
 aplicado pelo núcleo).
 """
@@ -69,7 +69,7 @@ _COLUNAS = ("data", "ultimo", "abertura", "maxima", "minima")
 _SERIES = {
     "cds10": ("investing_cds10_brasil", "CDS Brasil 10 anos (Investing.com)", "pontos-base", (10.0, 2000.0), 15),
     "cds5": ("investing_cds5_brasil", "CDS Brasil 5 anos (Investing.com)", "pontos-base", (10.0, 2000.0), 15),
-    "ibov": ("investing_ibov", "Ibovespa — fechamento diário (Investing.com)", "pontos", (100.0, 1_000_000.0), 15),
+    "ibov": ("investing_ibov", "Ibovespa: fechamento diário (Investing.com)", "pontos", (100.0, 1_000_000.0), 15),
 }
 
 
@@ -83,7 +83,7 @@ def identificar_serie(nome_arquivo: str) -> str | None:
 
     Trabalha por tokens (separados por qualquer caractere não alfanumérico), não por
     substring bruta do nome inteiro: uma checagem de "contém 'cds' e contém '10'" no
-    nome completo é ingênua demais — nomes com intervalo de datas (ex.:
+    nome completo é ingênua demais: nomes com intervalo de datas (ex.:
     ``cds5_planilha_20100101_20260101.csv``, ou ``(2501 2509)`` de exports do
     Investing.com) quase sempre têm um "10" em algum lugar da data, o que faria um
     arquivo de CDS 5 anos ser confundido com CDS 10 anos. Por isso: ``cds10``/``cds5``
@@ -117,7 +117,7 @@ def identificar_serie(nome_arquivo: str) -> str | None:
 def _parse_numero_br(valor: object) -> float:
     """Converte número em formato brasileiro (``1.234,56``) para float. Vazio/'-' -> NaN."""
     s = "" if valor is None else str(valor).strip()
-    if not s or s in {"-", "—", "n/a", "N/A"}:
+    if not s or s in {"-", "-", "n/a", "N/A"}:
         return float("nan")
     s = s.replace(".", "").replace(",", ".")
     try:
@@ -171,14 +171,14 @@ def _specs():
         base = dict(unidade=unidade, colunas=_COLUNAS, chave=("data",), valores=("ultimo",),
                     modo="acumular", faixa=faixa)
         yield SerieSpec(id=sid, descricao=desc, frequencia="D", max_lacuna_dias=lacuna, **base)
-        yield SerieSpec(id=f"{sid}_mensal", descricao=f"{desc} — mensal (data = 1º dia do mês)",
+        yield SerieSpec(id=f"{sid}_mensal", descricao=f"{desc}: mensal (data = 1º dia do mês)",
                         frequencia="M", max_lacuna_dias=35, **base)
 
 
 @registrar
 class Investing(Coletor):
     fonte = "investing"
-    descricao = "Investing.com — CDS Brasil 5a/10a e Ibovespa (coleta manual: CSV 'Dados Históricos')"
+    descricao = "Investing.com: CDS Brasil 5a/10a e Ibovespa (coleta manual: CSV 'Dados Históricos')"
     manual = True
     series = tuple(_specs())
 

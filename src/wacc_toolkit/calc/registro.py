@@ -37,8 +37,10 @@ def gravar_registro(resultado: ResultadoWACC, pasta: Path) -> Path:
     pasta.mkdir(parents=True, exist_ok=True)
     agora = datetime.now(timezone.utc)
     dados = {"gerado_em": agora.isoformat(timespec="seconds"), "codigo": versao_codigo(), **resultado.to_dict()}
-    nome = f"{_slug(resultado.config.projeto)}_{resultado.config.data_base}_{agora:%Y%m%dT%H%M%S}.json"
-    caminho = pasta / nome
+    base = f"{_slug(resultado.config.projeto)}_{resultado.config.data_base}_{agora:%Y%m%dT%H%M%S}"
+    caminho, n = pasta / f"{base}.json", 2
+    while caminho.exists() or caminho.with_suffix(".xlsx").exists():  # dois cálculos no mesmo segundo
+        caminho, n = pasta / f"{base}_{n}.json", n + 1
     caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
     return caminho
 

@@ -13,9 +13,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pywin32>=306; sys_platform == 'win32'"]
+app = ["streamlit>=1.40"]
 
 [project.scripts]
 wacc = "wacc_toolkit.cli:main"
+wacc-app = "wacc_toolkit.app.executar:main"
 
 [build-system]
 requires = ["hatchling"]

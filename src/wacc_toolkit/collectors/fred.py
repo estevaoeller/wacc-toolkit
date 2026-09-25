@@ -1,4 +1,4 @@
-"""FRED (Federal Reserve Bank of St. Louis) — Treasury nominal e TIPS de 10 anos.
+"""FRED (Federal Reserve Bank of St. Louis): Treasury nominal e TIPS de 10 anos.
 
 Implementação de referência do contrato de coletor.
 
@@ -50,7 +50,7 @@ def interpretar_csv(conteudo: bytes, codigo: str) -> pd.DataFrame:
 @registrar
 class FRED(Coletor):
     fonte = "fred"
-    descricao = "FRED — Treasury 10a nominal e TIPS 10a (diárias e médias mensais)"
+    descricao = "FRED: Treasury 10a nominal e TIPS 10a (diárias e médias mensais)"
     series = tuple(
         SerieSpec(id=sid, descricao=desc, unidade="% a.a.", frequencia=freq, faixa=faixa,
                   max_lacuna_dias=lac, extras={"codigo_fred": cod})

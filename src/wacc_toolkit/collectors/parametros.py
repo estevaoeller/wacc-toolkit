@@ -11,7 +11,7 @@ Formato::
     id = "ir_csll"
     valor = 34.0
     unidade = "%"
-    fonte = "Receita Federal — IRPJ 15% + adicional 10% + CSLL 9%"
+    fonte = "Receita Federal: IRPJ 15% + adicional 10% + CSLL 9%"
     verificado_em = 2026-09-25
     responsavel = "..."
     notas = ""
@@ -51,7 +51,7 @@ def interpretar_toml(conteudo: bytes) -> pd.DataFrame:
 @registrar
 class Parametros(Coletor):
     fonte = "parametros"
-    descricao = "Parâmetros manuais (IR/CSLL, remuneração BNDES...) — entrada/parametros/"
+    descricao = "Parâmetros manuais (IR/CSLL, remuneração BNDES...): entrada/parametros/"
     manual = True
     series = (SerieSpec("parametros_manuais", "Parâmetros manuais vigentes", "ver coluna unidade", "V",
                         colunas=COLUNAS, chave=("parametro",), valores=("valor",)),)

@@ -1,4 +1,4 @@
-"""Modo de cálculo 1 — prática da planilha Santa Maria (referência conceitual: MF/STN 2018).
+"""Modo de cálculo 1: prática da planilha Santa Maria (referência conceitual: MF/STN 2018).
 
 Cada variável é uma função que devolve um :class:`Componente` com o valor (em fração
 decimal: 0,043 = 4,3%), o rótulo da janela gerado pelos parâmetros, a fórmula aplicada e
@@ -217,14 +217,14 @@ def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
         dfd, md, completados = None, None, pd.PeriodIndex([], freq="M")
     cds = _na_janela(mensal_cds, jc)
     _exigir_cobertura(cds, jc, "CDS 10a (baixe o CSV do Investing para Bases/entrada/investing/)")
-    # Volatilidades diárias (retornos ln) — Ibovespa (B3) e PU da NTN-B
+    # Volatilidades diárias (retornos ln): Ibovespa (B3) e PU da NTN-B
     jv = interpretar(op.vol_janela, corte)
     dfi, mi = bases.ler("b3_ibov")
     ibov = dfi.set_index("data")["fechamento"].sort_index()
     ri = np.log(ibov / ibov.shift(1))
     ri_j = ri[(ri.index >= pd.Timestamp(jv.data_inicio)) & (ri.index <= pd.Timestamp(jv.data_fim))].dropna()
     if (ri_j.abs() > 0.5).any():
-        raise ValueError("Ibovespa: retorno diário > 50% na janela (rebase de 1997?) — ajuste a janela")
+        raise ValueError("Ibovespa: retorno diário > 50% na janela (rebase de 1997?): ajuste a janela")
     dft, mt = bases.ler("tesouro_td_taxas")
     ntnb = dft[(dft["titulo"] == NTNB_TITULO) & (dft["vencimento"].astype(str) == op.ntnb_vencimento)]
     if ntnb.empty:
