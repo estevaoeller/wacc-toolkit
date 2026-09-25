@@ -21,7 +21,12 @@ wacc fontes                 # lista fontes e séries
 wacc atualizar              # atualiza todas as fontes
 wacc atualizar --fonte fred # atualiza uma fonte
 wacc status                 # situação de cada série
+wacc importar investing <arquivo-ou-pasta>   # fontes manuais (ex.: CSV mensal do CDS baixado no Investing)
+wacc calcular --projeto projeto.toml --excel # WACC do projeto + Excel auditável
 ```
+
+### Fontes manuais
+O Investing.com não permite download automático. Em *Dados Históricos*, escolha o período **Mensal**, baixe o CSV e rode `wacc importar investing <pasta>`. O arquivo original não é alterado: uma cópia vai para `entrada/investing/importado_<data>/`, é registrada com hash, validada e incorporada à série.
 
 ## Estrutura das bases
 

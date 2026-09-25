@@ -152,3 +152,20 @@ def test_arquivo_mensal_vai_para_serie_mensal(ctx, repo):
     r = executar(Investing(), ctx)
     gravadas = {s.serie for s in r.series if s.status == "gravada"}
     assert gravadas == {"investing_cds10_brasil_mensal"}
+
+
+def test_cli_importar_copia_sem_alterar_original(tmp_path):
+    from wacc_toolkit.cli import main
+
+    origem = tmp_path / "Dados" / "CDS"
+    origem.mkdir(parents=True)
+    arq = origem / "Brasil CDS 10 Anos USD - Visão Geral.csv"
+    arq.write_text('﻿"Data","Último","Abertura","Máxima","Mínima","Var%"\n'
+                   '"01.02.2026","210,0","210,0","210,0","210,0","0,00%"\n'
+                   '"01.01.2026","200,0","200,0","200,0","200,0","0,00%"\n', encoding="utf-8")
+    antes = arq.read_bytes()
+    assert main(["--bases", str(tmp_path / "bases"), "importar", "investing", str(origem)]) == 0
+    assert arq.read_bytes() == antes
+    assert list((tmp_path / "bases" / "entrada" / "investing").rglob("*.csv"))
+    assert (tmp_path / "bases" / "tratado" / "investing_cds10_brasil_mensal.csv").exists()
+    assert main(["--bases", str(tmp_path / "bases"), "importar", "fred", str(origem)]) == 2

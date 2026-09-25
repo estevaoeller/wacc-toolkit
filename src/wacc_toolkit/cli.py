@@ -81,6 +81,44 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_importar(args) -> int:
+    """Copia arquivos baixados à mão para entrada/<fonte>/importado_<data>/ (o original fica intacto)
+    e atualiza a fonte. Aceita arquivos ou pastas (copia os *.csv / *.toml de dentro)."""
+    import shutil
+    from datetime import date
+    from pathlib import Path
+
+    repo = Repositorio(resolver_bases_dir(args.bases))
+    _configurar_log(repo, False)
+    coletores = carregar_todos()
+    if args.fonte not in coletores or not coletores[args.fonte].manual:
+        manuais = [n for n, c in coletores.items() if c.manual]
+        print(f"'{args.fonte}' não é uma fonte manual. Fontes manuais: {manuais}", file=sys.stderr)
+        return 2
+    destino = repo.dir_entrada(args.fonte) / f"importado_{date.today():%Y-%m-%d}"
+    destino.mkdir(parents=True, exist_ok=True)
+    copiados = []
+    for item in map(Path, args.arquivos):
+        candidatos = sorted(p for p in item.iterdir() if p.suffix.lower() in (".csv", ".toml")) if item.is_dir() else [item]
+        for arq in candidatos:
+            if not arq.is_file():
+                print(f"Arquivo não encontrado: {arq}", file=sys.stderr)
+                return 2
+            shutil.copy2(arq, destino / arq.name)
+            copiados.append(arq.name)
+    if not copiados:
+        print("Nenhum arquivo .csv/.toml encontrado.", file=sys.stderr)
+        return 2
+    print(f"Copiados para {destino}:\n  " + "\n  ".join(copiados))
+    r = executar(coletores[args.fonte](), Contexto(repo))
+    print(f"\n{args.fonte}: {r.status}" + (f" ({r.erro})" if r.erro else ""))
+    for s in r.series:
+        print(f"  {s.serie}: {s.status}, {s.linhas} linhas, fim {s.fim}")
+        for p in s.problemas:
+            print(f"     {p}")
+    return 0 if r.status in ("ok", "sem_novidade") else 1
+
+
 def cmd_calcular(args) -> int:
     from pathlib import Path
 
@@ -132,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     a.set_defaults(func=cmd_atualizar)
     sub.add_parser("status", help="situação de cada série").set_defaults(func=cmd_status)
     sub.add_parser("fontes", help="lista fontes e séries").set_defaults(func=cmd_fontes)
+    im = sub.add_parser("importar", help="importa arquivos baixados à mão (ex.: CDS do Investing) e atualiza")
+    im.add_argument("fonte", help="fonte manual (ex.: investing, parametros)")
+    im.add_argument("arquivos", nargs="+", help="arquivos ou pastas com os arquivos baixados")
+    im.set_defaults(func=cmd_importar)
     c = sub.add_parser("calcular", help="calcula o WACC de um projeto (modo 1)")
     c.add_argument("--projeto", required=True, help="arquivo TOML de configuração do projeto")
     c.add_argument("--saida", help="pasta dos registros (padrão: <bases>/../Calculos)")
