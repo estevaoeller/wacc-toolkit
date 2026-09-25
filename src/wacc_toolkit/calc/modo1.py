@@ -36,6 +36,8 @@ NTNB_TITULO = "Tesouro IPCA+ com Juros Semestrais"
 class Fase:
     setor: str
     peso: float
+    fase: str = ""        # ex.: "construção", "operação" (texto das fontes)
+    base_peso: str = ""   # ex.: "CAPEX", "OPEX" (o peso é a proporção de ...)
 
 
 @dataclass
@@ -63,6 +65,8 @@ class ConfigProjeto:
     linha_bndes: str                       # id em parametros_manuais (ex.: bndes_rem_finem_saneamento)
     spread_credito: float                  # fração decimal (entrada do projeto)
     regiao: str = "global"                 # global | emerging
+    spread_descricao: str = ""             # rótulo curto (coluna Descrição), ex.: "Financ. BNDES"
+    spread_fonte: str = ""                 # texto da nota de fonte do spread
     opcoes: Opcoes = field(default_factory=Opcoes)
     notas: str = ""
 
@@ -83,6 +87,8 @@ class ConfigProjeto:
             regiao=d["beta"].get("regiao", "global"),
             linha_bndes=d["kd"]["linha_bndes"],
             spread_credito=float(d["kd"]["spread_credito"]),
+            spread_descricao=d["kd"].get("spread_descricao", ""),
+            spread_fonte=d["kd"].get("spread_fonte", ""),
             opcoes=Opcoes(**d.get("opcoes", {})),
             notas=d.get("notas", ""),
         )
@@ -367,7 +373,8 @@ def calcular(cfg: ConfigProjeto, bases: Bases) -> ResultadoWACC:
                                         lr["fonte"], None, [rec_r], {"linha": cfg.linha_bndes,
                                                                      "verificado_em": lr["verificado_em"]})
     c["spread_credito"] = Componente("spread_credito", "Taxa de risco de crédito", cfg.spread_credito,
-                                     "entrada do projeto", "informado na configuração do projeto")
+                                     "entrada do projeto", cfg.spread_descricao or "informado pelo projeto",
+                                     detalhes={"fonte": cfg.spread_fonte})
     c["ipca"] = ipca_focus(bases, cfg.data_base, op.ipca_anos)
 
     # composição (fórmulas da planilha)
