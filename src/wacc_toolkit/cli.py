@@ -82,6 +82,9 @@ def cmd_status(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for fluxo in (sys.stdout, sys.stderr):  # console do Windows (cp1252) não tem "→", acentos etc.
+        if hasattr(fluxo, "reconfigure"):
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser(prog="wacc", description="Atualizador das bases de WACC")
     p.add_argument("--bases", help="diretório das bases (sobrepõe WACC_BASES_DIR / wacc.local.toml)")
     sub = p.add_subparsers(dest="cmd", required=True)
