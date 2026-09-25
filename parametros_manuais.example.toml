@@ -1,0 +1,29 @@
+# Copie para <bases>/entrada/parametros/parametros_manuais.toml e mantenha atualizado.
+# Cada alteração gera uma nova versão rastreável no manifesto.
+
+[[parametro]]
+id = "ir_csll"
+valor = 34.0
+unidade = "%"
+fonte = "Receita Federal: IRPJ 15% + adicional 10% + CSLL 9% (Lei 9.249/1995; Lei 7.689/1988)"
+verificado_em = 2026-09-25
+responsavel = ""
+notas = "Revisar em caso de reforma da tributação da renda."
+
+[[parametro]]
+id = "bndes_rem_finem_educacao_saude"
+valor = 1.5
+unidade = "% a.a."
+fonte = "BNDES Finem: Educação, Saúde e Assistência Social (página do produto)"
+verificado_em = 2026-03-03
+responsavel = ""
+notas = "Remuneração básica do BNDES."
+
+[[parametro]]
+id = "bndes_rem_finem_saneamento"
+valor = 1.3
+unidade = "% a.a."
+fonte = "BNDES Finem: Água, esgoto e resíduos sólidos (página do produto)"
+verificado_em = 2026-03-03
+responsavel = ""
+notas = "Remuneração básica do BNDES."
