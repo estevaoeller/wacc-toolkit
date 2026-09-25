@@ -15,3 +15,6 @@ Bases/
 *.xlsm
 *.csv
 !tests/fixtures/**
+
+# cache do Python também dentro das fixtures
+tests/fixtures/**/__pycache__/
