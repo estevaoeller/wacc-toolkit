@@ -1,4 +1,4 @@
-"""Exportador Excel auditável: fórmulas vivas reproduzindo os valores do motor Python."""
+"""Exportador Excel auditável: fórmulas vivas na aba "Custo de Capital" reproduzindo o motor Python."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pytest
 
 import test_calc_modo1 as m1
 from wacc_toolkit.calc.modo1 import Fase, beta_estrutura, calcular, compor
-from wacc_toolkit.saida.excel import exportar_excel
+from wacc_toolkit.saida.excel import _layout_principal, exportar_excel
 
 # reaproveita a fixture de bases sintéticas do motor (mesmo cenário validado em test_calc_modo1.py)
 bases_sinteticas = m1.bases_sinteticas
@@ -14,11 +14,10 @@ bases_sinteticas = m1.bases_sinteticas
 
 def _com_disponivel() -> bool:
     try:
-        import win32com.client  # noqa: F401
+        import win32com.client
     except ImportError:
         return False
     try:
-        import win32com.client
         app = win32com.client.DispatchEx("Excel.Application")
         app.Quit()
     except Exception:
@@ -44,11 +43,10 @@ def test_abas_presentes(caminho_xlsx):
 
     wb = openpyxl.load_workbook(caminho_xlsx)
     nomes = wb.sheetnames
-    assert nomes[0] == "Premissas"
-    assert nomes[1] == "Resumo"
+    assert nomes[0] == "Custo de Capital"
+    assert nomes[1] == "Parâmetros"
     assert nomes[-1] == "Registro"
-    assert any(n.startswith("R_") for n in nomes)
-    # uma aba de recorte por série efetivamente usada
+    assert "Resumo" not in nomes and "Premissas" not in nomes
     esperadas = {"R_rf", "R_rf_estrutural", "R_rm", "R_cds10", "R_ibov", "R_ntnb", "R_beta", "R_de",
                  "R_treasury", "R_tips", "R_tlp", "R_focus"}
     assert esperadas <= set(nomes)
@@ -62,14 +60,47 @@ def test_nomes_definidos(resultado, caminho_xlsx):
     assert esperados <= set(wb.defined_names.keys())
 
 
-def test_resumo_tem_uma_linha_por_componente(resultado, caminho_xlsx):
+def test_sem_travessao_gridlines_e_freeze(caminho_xlsx):
     import openpyxl
 
     wb = openpyxl.load_workbook(caminho_xlsx)
-    ws = wb["Resumo"]
-    nomes_planilha = [ws.cell(row=r, column=1).value for r in range(2, 2 + len(resultado.componentes))]
-    nomes_esperados = [c.nome for c in resultado.componentes.values()]
-    assert nomes_planilha == nomes_esperados
+    for ws in wb.worksheets:
+        assert ws.sheet_view.showGridLines is False, ws.title
+        assert ws.freeze_panes is None, ws.title
+        for row in ws.iter_rows():
+            for cel in row:
+                if isinstance(cel.value, str):
+                    assert "—" not in cel.value and "–" not in cel.value, (ws.title, cel.coordinate, cel.value)
+                if cel.comment is not None:
+                    assert "—" not in cel.comment.text and "–" not in cel.comment.text
+
+
+def test_sha256_so_no_registro(caminho_xlsx):
+    import openpyxl
+
+    wb = openpyxl.load_workbook(caminho_xlsx)
+    for ws in wb.worksheets:
+        if ws.title == "Registro":
+            continue
+        for row in ws.iter_rows():
+            for cel in row:
+                if isinstance(cel.value, str) and "SHA256" in cel.value.upper():
+                    pytest.fail(f"SHA256 fora do Registro: {ws.title}!{cel.coordinate}")
+
+
+def test_largura_colunas_recorte(caminho_xlsx):
+    import openpyxl
+
+    wb = openpyxl.load_workbook(caminho_xlsx)
+    ws = wb["R_rf"]
+    assert ws.column_dimensions["A"].width == pytest.approx(14.57, abs=0.01)
+    assert ws.column_dimensions["B"].width == pytest.approx(14.57, abs=0.01)
+
+
+def test_layout_tem_20_componentes(resultado):
+    row_of = _layout_principal()
+    assert len(row_of) == 20
+    assert set(row_of) == set(resultado.componentes)
 
 
 # ------------------------------------------------------------------ avaliação via Excel (COM)
@@ -84,12 +115,10 @@ def _abrir_com(caminho):
     return app, wb
 
 
-def _ler_resumo(wb, resultado):
-    ws = wb.Worksheets("Resumo")
-    valores = {}
-    for i, comp_id in enumerate(resultado.componentes):
-        valores[comp_id] = float(ws.Cells(2 + i, 2).Value)
-    return valores
+def _ler_custo_capital(wb, resultado):
+    row_of = _layout_principal()
+    ws = wb.Worksheets("Custo de Capital")
+    return {cid: float(ws.Cells(r, 2).Value) for cid, r in row_of.items()}
 
 
 @pytest.mark.excel
@@ -97,7 +126,7 @@ def _ler_resumo(wb, resultado):
 def test_formulas_batem_com_python_via_com(resultado, caminho_xlsx):
     app, wb = _abrir_com(caminho_xlsx)
     try:
-        valores = _ler_resumo(wb, resultado)
+        valores = _ler_custo_capital(wb, resultado)
     finally:
         wb.Close(False)
         app.Quit()
@@ -112,7 +141,8 @@ def test_alterar_peso_recalcula_em_cascata(bases_sinteticas, resultado, caminho_
     try:
         wb.Names("peso_1").RefersToRange.Value = 0.5
         wb.Application.CalculateFullRebuild()
-        valores = _ler_resumo(wb, resultado)
+        valores = _ler_custo_capital(wb, resultado)
+        nota5 = wb.Worksheets("Custo de Capital").Cells(34, 1).Value
     finally:
         wb.Close(False)
         app.Quit()
@@ -129,3 +159,5 @@ def test_alterar_peso_recalcula_em_cascata(bases_sinteticas, resultado, caminho_
     assert valores["d_v"] == pytest.approx(cd.valor, abs=1e-9)
     assert valores["wacc_nominal"] == pytest.approx(comp["wacc_nominal"], abs=1e-9)
     assert valores["wacc_nominal"] != pytest.approx(resultado["wacc_nominal"], abs=1e-6)
+    # a nota (5) é uma fórmula de texto que também recalcula com o novo peso
+    assert "50,00%" in nota5 or "50.00%" in nota5
