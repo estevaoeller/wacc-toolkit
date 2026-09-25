@@ -1,0 +1,3 @@
+# Copie para wacc.local.toml (ignorado pelo git) e ajuste o caminho.
+# Alternativa: variável de ambiente WACC_BASES_DIR ou opção --bases na CLI.
+bases_dir = "C:/caminho/para/19_WACC/Bases"

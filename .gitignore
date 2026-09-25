@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Configuração local (caminhos da máquina) e dados: nunca versionar
+wacc.local.toml
+bases/
+Bases/
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+!tests/fixtures/**
