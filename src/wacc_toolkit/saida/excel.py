@@ -54,7 +54,14 @@ CENTRO = Alignment(horizontal="center", vertical="center")
 FMT_PCT = "0.00%"
 FMT_NUM = "0.000000"
 FMT_DATA = "DD/MM/YYYY"
-LARGURA_R = 14.57  # ≈ 107 px em Calibri 11
+LARGURA_R = 15.29  # 107 px no Excel (o arquivo guarda a largura com ~0,71 de preenchimento)
+LARGURA_MARGEM = 3.57  # 25 px no Excel (coluna A vazia)
+ESQUERDA = Alignment(horizontal="left", vertical="center")
+
+
+def _mes_ano(d) -> str:
+    """Data-base exibida como mês/ano (ex.: 01/2026)."""
+    return f"{d.month:02d}/{d.year}"
 
 # séries -> página pública da fonte (para o link nas abas de recorte)
 URLS_SERIE = {
@@ -283,25 +290,29 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     abas_usadas: set[str] = set()
 
     # ============================================================ Custo de Capital
+    # colunas: A = margem vazia, B = Item, C = Valor, D = Descrição
+    CI, CV, CD = 2, 3, 4
+    VL = get_column_letter(CV)
     cc = wb.create_sheet("Custo de Capital")
     row_of = _layout_principal()
     linha_pond0 = 42
     pond = _layout_ponderacao(n_fases, linha_pond0) if n_fases > 1 else None
 
-    cc.cell(row=1, column=1, value=_sanitizar(f"Custo de Capital - {cfg.projeto}")).font = TITULO
-    for j, t in enumerate(("Item", "Valor", "Descrição"), start=1):
+    cc.cell(row=1, column=CI, value=_sanitizar(f"Custo de Capital - {cfg.projeto}")).font = TITULO
+    for j, t in enumerate(("Item", "Valor", "Descrição"), start=CI):
         cel = cc.cell(row=3, column=j, value=t)
         cel.font = BRANCO_NEGRITO
         cel.fill = FUNDO_CABECALHO_TABELA
         cel.alignment = CENTRO
         cel.border = BORDA
-    cc.column_dimensions["A"].width = 45
-    cc.column_dimensions["B"].width = 12
-    cc.column_dimensions["C"].width = 70
+    cc.column_dimensions["A"].width = LARGURA_MARGEM  # coluna A vazia (25 px)
+    cc.column_dimensions["B"].width = 45
+    cc.column_dimensions["C"].width = 12
+    cc.column_dimensions["D"].width = 70
 
     def _secao(row, texto):
-        for col in (1, 2, 3):
-            cel = cc.cell(row=row, column=col, value=texto if col == 1 else None)
+        for col in (CI, CV, CD):
+            cel = cc.cell(row=row, column=col, value=texto if col == CI else None)
             cel.font = NEGRITO
             cel.fill = FUNDO_SECAO
             cel.border = BORDA
@@ -311,12 +322,13 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
 
     def _linha(cid, formula_ou_valor, descricao, *, editable=False, italico=False, total=False, wacc=False):
         r = row_of[cid]
-        item = cc.cell(row=r, column=1, value=_sanitizar(_ROTULOS[cid]))
+        item = cc.cell(row=r, column=CI, value=_sanitizar(_ROTULOS[cid]))
         item.border = BORDA
-        val = cc.cell(row=r, column=2, value=formula_ou_valor)
+        val = cc.cell(row=r, column=CV, value=formula_ou_valor)
         val.number_format = _FMT_VALOR.get(cid, FMT_PCT)
         val.border = BORDA
-        desc_cel = cc.cell(row=r, column=3)
+        val.alignment = CENTRO
+        desc_cel = cc.cell(row=r, column=CD)
         desc_cel.border = BORDA
         if cid in _COMPOSTOS:
             desc_cel.fill = FUNDO_HACHURA
@@ -342,7 +354,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         return r
 
     def _ref(cid: str) -> str:
-        return f"B{row_of[cid]}"
+        return f"{VL}{row_of[cid]}"
 
     # ---- Rf / Rf estrutural
     def _serie_media(comp_id: str) -> str:
@@ -502,11 +514,11 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     desc_beta_dv = f"{cfg.regiao.title()}/{' e '.join(f.setor for f in cfg.fases)}"
 
     if pond:
-        _def_nome(wb, "peso_1", f"'Custo de Capital'!$B${pond['peso'][0]}")
+        _def_nome(wb, "peso_1", f"'Custo de Capital'!${VL}${pond['peso'][0]}")
         for i in range(2, n_fases + 1):
-            _def_nome(wb, f"peso_{i}", f"'Custo de Capital'!$B${pond['peso'][i-1]}")
-        f_beta_u = f"=B{pond['media_beta']}"
-        f_dv = f"=B{pond['media_dv']}"
+            _def_nome(wb, f"peso_{i}", f"'Custo de Capital'!${VL}${pond['peso'][i-1]}")
+        f_beta_u = f"={VL}{pond['media_beta']}"
+        f_dv = f"={VL}{pond['media_dv']}"
     else:
         ws_de["Z1"] = 1.0  # fase única: peso fixo (100%), sem bloco de ponderação visível
         _def_nome(wb, "peso_1", f"'{aba_de}'!$Z$1")
@@ -521,7 +533,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     _sheet_basico(wb, abas_usadas, rec_t.nome, rec_t)
     desc_t = _desc_param(c["t"].rotulo)
     r_t = _linha("t", c["t"].valor, desc_t, editable=True)
-    _def_nome(wb, "T", f"'Custo de Capital'!$B${r_t}")
+    _def_nome(wb, "T", f"'Custo de Capital'!${VL}${r_t}")
 
     # ---- beta_l
     _linha("beta_l", f"={_ref('beta_u')}*(1+(1-T)*{_ref('d_v')}/(1-{_ref('d_v')}))", "")
@@ -576,12 +588,12 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     _sheet_basico(wb, abas_usadas, rec_r.nome, rec_r)
     desc_rem = _desc_param(c["remuneracao_bndes"].rotulo)
     r_rem = _linha("remuneracao_bndes", c["remuneracao_bndes"].valor, desc_rem, editable=True)
-    _def_nome(wb, "remuneracao", f"'Custo de Capital'!$B${r_rem}")
+    _def_nome(wb, "remuneracao", f"'Custo de Capital'!${VL}${r_rem}")
 
     # ---- Taxa de risco de crédito (entrada editável)
     desc_spread = cfg.spread_descricao or "Spread de crédito do projeto"
     r_spr = _linha("spread_credito", cfg.spread_credito, desc_spread, editable=True)
-    _def_nome(wb, "spread", f"'Custo de Capital'!$B${r_spr}")
+    _def_nome(wb, "spread", f"'Custo de Capital'!${VL}${r_spr}")
 
     # ---- IPCA (Focus)
     def _ipca_formula() -> str:
@@ -635,7 +647,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
            "", wacc=True)
 
     # ============================================================ Fonte (notas 1-10)
-    cc.cell(row=29, column=1, value="Fonte:").font = NEGRITO
+    cc.cell(row=29, column=CI, value="Fonte:").font = NEGRITO
     notas = []
     notas.append(f"(1) Federal Reserve (FRED GS10) - T-10 {_meses_txt(op.rf_janela)} ({c['rf'].janela['rotulo']}).")
     notas.append(f"(2) S&P 500 Total Return, Yahoo Finance - {desc_rm}.")
@@ -671,8 +683,8 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
 
     def _nota(r: int, valor: str, n_caracteres: int) -> None:
         """Nota ocupa a largura da tabela (A:C), com quebra de linha e altura estimada."""
-        cc.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
-        cel = cc.cell(row=r, column=1, value=valor)
+        cc.merge_cells(start_row=r, start_column=CI, end_row=r, end_column=CD)
+        cel = cc.cell(row=r, column=CI, value=valor)
         cel.font = Font(size=9)
         cel.alignment = Alignment(wrap_text=True, vertical="top")
         linhas = max(1, -(-n_caracteres // 210))
@@ -699,14 +711,14 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
             rb, rd, rp = pond["beta"][j2], pond["dv"][j2], pond["peso"][j2]
             if j2 == 0:
                 pecas += [f" Para a fase de {f.fase}, adotou-se o setor {cfg.regiao.title()} - {f.setor}, "
-                          f"com um beta desalavancado de ", _texto(f'TEXT(B{rb},"0,000")'),
-                          " e alavancagem (D/(D+E)) de ", _texto(f'TEXT(B{rd},"0,00%")'),
-                          f", ponderado pela proporção do {f.base_peso} (", _texto(f'TEXT(B{rp},"0,00%")'), ")."]
+                          f"com um beta desalavancado de ", _texto(f'TEXT({VL}{rb},"0,000")'),
+                          " e alavancagem (D/(D+E)) de ", _texto(f'TEXT({VL}{rd},"0,00%")'),
+                          f", ponderado pela proporção do {f.base_peso} (", _texto(f'TEXT({VL}{rp},"0,00%")'), ")."]
             else:
                 pecas += [f" Já para a fase de {f.fase}, utilizou-se o setor {cfg.regiao.title()} - {f.setor}, "
-                          f"com um beta desalavancado de ", _texto(f'TEXT(B{rb},"0,000")'), " e alavancagem de ",
-                          _texto(f'TEXT(B{rd},"0,00%")'),
-                          f", ponderado pela proporção do {f.base_peso} (", _texto(f'TEXT(B{rp},"0,00%")'), ")."]
+                          f"com um beta desalavancado de ", _texto(f'TEXT({VL}{rb},"0,000")'), " e alavancagem de ",
+                          _texto(f'TEXT({VL}{rd},"0,00%")'),
+                          f", ponderado pela proporção do {f.base_peso} (", _texto(f'TEXT({VL}{rp},"0,00%")'), ")."]
 
     def _monta_concat(pecas) -> str:
         partes = []
@@ -724,63 +736,68 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
 
     # ============================================================ bloco de ponderação
     if pond:
-        cc.cell(row=41, column=1, value="Ponderação dos betas e do D/(D+E) por fase").font = NEGRITO
+        cc.cell(row=41, column=CI, value="Ponderação dos betas e do D/(D+E) por fase").font = NEGRITO
         for j2, f in enumerate(cfg.fases):
             rb, rd, rp = pond["beta"][j2], pond["dv"][j2], pond["peso"][j2]
-            cc.cell(row=rb, column=1, value="Beta desalavancado").border = BORDA
-            vb_cel = cc.cell(row=rb, column=2, value=f"='{aba_beta}'!{col_beta}{r0b + j2}")
+            cc.cell(row=rb, column=CI, value="Beta desalavancado").border = BORDA
+            vb_cel = cc.cell(row=rb, column=CV, value=f"='{aba_beta}'!{col_beta}{r0b + j2}")
+            vb_cel.alignment = CENTRO
             vb_cel.number_format = "0.000"
             vb_cel.border = BORDA
-            cc.cell(row=rb, column=3, value=_sanitizar(f.setor)).border = BORDA
+            cc.cell(row=rb, column=CD, value=_sanitizar(f.setor)).border = BORDA
 
-            cc.cell(row=rd, column=1, value="D/(D+E)").border = BORDA
-            vd_cel = cc.cell(row=rd, column=2, value=f"='{aba_de}'!{col_dv}{r0d + j2}")
+            cc.cell(row=rd, column=CI, value="D/(D+E)").border = BORDA
+            vd_cel = cc.cell(row=rd, column=CV, value=f"='{aba_de}'!{col_dv}{r0d + j2}")
+            vd_cel.alignment = CENTRO
             vd_cel.number_format = FMT_PCT
             vd_cel.border = BORDA
-            cc.cell(row=rd, column=3, value=_sanitizar(f"{cfg.regiao.title()} ({vb})")).border = BORDA
+            cc.cell(row=rd, column=CD, value=_sanitizar(f"{cfg.regiao.title()} ({vb})")).border = BORDA
 
-            cc.cell(row=rp, column=1, value="Peso").border = BORDA
+            cc.cell(row=rp, column=CI, value="Peso").border = BORDA
             if n_fases == 2 and j2 == 1:
-                vp_cel = cc.cell(row=rp, column=2, value=f"=1-B{pond['peso'][0]}")
+                vp_cel = cc.cell(row=rp, column=CV, value=f"=1-{VL}{pond['peso'][0]}")
             else:
-                vp_cel = _entrada(cc, rp, 2, f.peso)
+                vp_cel = _entrada(cc, rp, CV, f.peso)
+            vp_cel.alignment = CENTRO
             vp_cel.number_format = FMT_PCT
             vp_cel.border = BORDA
-            cc.cell(row=rp, column=3, value=_sanitizar(f"Proporção do {f.base_peso}")).border = BORDA
+            cc.cell(row=rp, column=CD, value=_sanitizar(f"Proporção do {f.base_peso}")).border = BORDA
 
         if pond["soma"]:
             r = pond["soma"]
-            cc.cell(row=r, column=1, value="Soma dos pesos (deve ser 100%)").font = NEGRITO
-            soma_cel = cc.cell(row=r, column=2, value="=" + "+".join(f"B{p}" for p in pond["peso"]))
+            cc.cell(row=r, column=CI, value="Soma dos pesos (deve ser 100%)").font = NEGRITO
+            soma_cel = cc.cell(row=r, column=CV, value="=" + "+".join(f"{VL}{p}" for p in pond["peso"]))
+            soma_cel.alignment = CENTRO
             soma_cel.number_format = FMT_PCT
 
-        prod_beta = "+".join(f"B{b}*B{p}" for b, p in zip(pond["beta"], pond["peso"]))
-        prod_dv = "+".join(f"B{d}*B{p}" for d, p in zip(pond["dv"], pond["peso"]))
+        prod_beta = "+".join(f"{VL}{b}*{VL}{p}" for b, p in zip(pond["beta"], pond["peso"]))
+        prod_dv = "+".join(f"{VL}{d}*{VL}{p}" for d, p in zip(pond["dv"], pond["peso"]))
         rmb, rmd = pond["media_beta"], pond["media_dv"]
-        cc.cell(row=rmb, column=1, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
-        c_mb = cc.cell(row=rmb, column=2, value=f"={prod_beta}")
+        cc.cell(row=rmb, column=CI, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
+        c_mb = cc.cell(row=rmb, column=CV, value=f"={prod_beta}")
+        c_mb.alignment = CENTRO
         c_mb.number_format = "0.000"
         c_mb.font = NEGRITO
-        cc.cell(row=rmb, column=3, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
-        cc.cell(row=rmd, column=1, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
-        c_md = cc.cell(row=rmd, column=2, value=f"={prod_dv}")
+        cc.cell(row=rmb, column=CD, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
+        cc.cell(row=rmd, column=CI, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
+        c_md = cc.cell(row=rmd, column=CV, value=f"={prod_dv}")
+        c_md.alignment = CENTRO
         c_md.number_format = FMT_PCT
         c_md.font = NEGRITO
-        cc.cell(row=rmd, column=3, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
+        cc.cell(row=rmd, column=CD, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
 
     # ============================================================ Parâmetros
     par = wb.create_sheet("Parâmetros")
     par.cell(row=1, column=1, value="Parâmetros").font = TITULO
     linha = 3
+    corte = pd.Period(resultado.corte, "M")
     for rot, val in (
-        ("Projeto:", cfg.projeto), ("Data-base:", cfg.data_base), ("Mês de corte:", resultado.corte),
+        ("Projeto:", cfg.projeto), ("Data-base:", _mes_ano(cfg.data_base)),
+        ("Mês de corte:", f"{corte.month:02d}/{corte.year}"),
         ("Modo:", "modo1_santa_maria"), ("Região Damodaran:", cfg.regiao),
     ):
         par.cell(row=linha, column=1, value=rot).font = NEGRITO
-        v = _to_pydate(val)
-        cel = par.cell(row=linha, column=2, value=v)
-        if isinstance(val, __import__("datetime").date):
-            cel.number_format = FMT_DATA
+        par.cell(row=linha, column=2, value=_sanitizar(val)).alignment = ESQUERDA
         linha += 1
     par.cell(row=linha, column=1, value="Opções de janela:").font = NEGRITO
     linha += 1
@@ -791,7 +808,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         ("TLP:", op.tlp_janela), ("IPCA (anos Focus):", op.ipca_anos),
     ):
         par.cell(row=linha, column=1, value=f"   {rot}")
-        par.cell(row=linha, column=2, value=val)
+        par.cell(row=linha, column=2, value=val).alignment = ESQUERDA
         linha += 1
     par.column_dimensions["A"].width = 30
     par.column_dimensions["B"].width = 24
@@ -845,7 +862,7 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         cp = reg.cell(row=r, column=2, value=comp.valor)
         cp.number_format = FMT_PCT
         cp.border = BORDA
-        cf = reg.cell(row=r, column=3, value=f"='Custo de Capital'!B{row_of[cid]}")
+        cf = reg.cell(row=r, column=3, value=f"='Custo de Capital'!{VL}{row_of[cid]}")
         cf.number_format = FMT_PCT
         cf.border = BORDA
         cd = reg.cell(row=r, column=4, value=f"=B{r}-C{r}")
@@ -855,8 +872,23 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     reg.column_dimensions["A"].width = 30
     reg.column_dimensions["B"].width = 40
 
+    # ============================================================ Capa
+    capa = wb.create_sheet("Capa")
+    capa.column_dimensions["A"].width = LARGURA_MARGEM
+    capa.column_dimensions["B"].width = 22
+    capa.column_dimensions["C"].width = 60
+    capa.cell(row=3, column=2, value="Custo Médio Ponderado de Capital (WACC)").font = Font(bold=True, size=16)
+    for i, (rot, val) in enumerate((
+        ("Projeto:", cfg.projeto),
+        ("Data-base:", _mes_ano(cfg.data_base)),
+        ("Data de criação:", datetime.now().strftime("%d/%m/%Y %H:%M")),
+    )):
+        capa.cell(row=6 + i, column=2, value=rot).font = NEGRITO
+        capa.cell(row=6 + i, column=3, value=_sanitizar(val)).alignment = ESQUERDA
+
     # ============================================================ ordem final e ajustes gerais
-    ordem_abas = ["Custo de Capital", "Parâmetros"] + [n for n in wb.sheetnames if n.startswith("R_")] + ["Registro"]
+    ordem_abas = (["Capa", "Custo de Capital", "Parâmetros"] + [n for n in wb.sheetnames if n.startswith("R_")]
+                  + ["Registro"])
     wb._sheets = [wb[n] for n in ordem_abas]
     wb.active = 0
 

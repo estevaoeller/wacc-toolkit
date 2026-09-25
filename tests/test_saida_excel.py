@@ -43,8 +43,8 @@ def test_abas_presentes(caminho_xlsx):
 
     wb = openpyxl.load_workbook(caminho_xlsx)
     nomes = wb.sheetnames
-    assert nomes[0] == "Custo de Capital"
-    assert nomes[1] == "Parâmetros"
+    assert nomes[0] == "Capa" and nomes[1] == "Custo de Capital"
+    assert nomes[2] == "Parâmetros"
     assert nomes[-1] == "Registro"
     assert "Resumo" not in nomes and "Premissas" not in nomes
     esperadas = {"R_rf", "R_rf_estrutural", "R_rm", "R_cds10", "R_ibov", "R_ntnb", "R_beta", "R_de",
@@ -93,8 +93,8 @@ def test_largura_colunas_recorte(caminho_xlsx):
 
     wb = openpyxl.load_workbook(caminho_xlsx)
     ws = wb["R_rf"]
-    assert ws.column_dimensions["A"].width == pytest.approx(14.57, abs=0.01)
-    assert ws.column_dimensions["B"].width == pytest.approx(14.57, abs=0.01)
+    assert ws.column_dimensions["A"].width == pytest.approx(15.29, abs=0.01)
+    assert ws.column_dimensions["B"].width == pytest.approx(15.29, abs=0.01)
 
 
 def test_layout_tem_20_componentes(resultado):
@@ -118,7 +118,7 @@ def _abrir_com(caminho):
 def _ler_custo_capital(wb, resultado):
     row_of = _layout_principal()
     ws = wb.Worksheets("Custo de Capital")
-    return {cid: float(ws.Cells(r, 2).Value) for cid, r in row_of.items()}
+    return {cid: float(ws.Cells(r, 3).Value) for cid, r in row_of.items()}
 
 
 @pytest.mark.excel
@@ -142,7 +142,7 @@ def test_alterar_peso_recalcula_em_cascata(bases_sinteticas, resultado, caminho_
         wb.Names("peso_1").RefersToRange.Value = 0.5
         wb.Application.CalculateFullRebuild()
         valores = _ler_custo_capital(wb, resultado)
-        nota5 = wb.Worksheets("Custo de Capital").Cells(34, 1).Value
+        nota5 = wb.Worksheets("Custo de Capital").Cells(34, 2).Value
     finally:
         wb.Close(False)
         app.Quit()
@@ -161,3 +161,24 @@ def test_alterar_peso_recalcula_em_cascata(bases_sinteticas, resultado, caminho_
     assert valores["wacc_nominal"] != pytest.approx(resultado["wacc_nominal"], abs=1e-6)
     # a nota (5) é uma fórmula de texto que também recalcula com o novo peso
     assert "50,00%" in nota5 or "50.00%" in nota5
+
+
+def test_layout_custo_de_capital_e_capa(tmp_path, bases_sinteticas):
+    """Coluna A vazia de 25 px, valores centralizados, capa com projeto/data-base/criação, datas em mês/ano."""
+    from openpyxl import load_workbook
+
+    from wacc_toolkit.calc.modo1 import calcular
+    from wacc_toolkit.saida.excel import exportar_excel
+
+    cfg = m1._cfg()
+    r = calcular(cfg, bases_sinteticas)
+    wb = load_workbook(exportar_excel(r, tmp_path / "x.xlsx"))
+    cc = wb["Custo de Capital"]
+    assert cc.column_dimensions["A"].width == pytest.approx(3.57, abs=0.01)
+    assert all(cc.cell(row=i, column=1).value is None for i in range(1, cc.max_row + 1))
+    assert cc["B3"].value == "Item" and cc["C3"].value == "Valor"
+    assert cc["C5"].alignment.horizontal == "center"
+    capa = {wb["Capa"].cell(row=i, column=2).value: wb["Capa"].cell(row=i, column=3).value for i in range(6, 9)}
+    assert capa["Projeto:"] == "Teste" and capa["Data-base:"] == "01/2026" and capa["Data de criação:"]
+    par = wb["Parâmetros"]
+    assert par["B4"].value == "01/2026" and par["B4"].alignment.horizontal == "left"
