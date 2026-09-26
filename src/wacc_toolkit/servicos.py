@@ -19,7 +19,7 @@ from .calc.fontes import Bases
 from .calc.janelas import JANELAS_PADRAO, acompanha_data_base, descrever, interpretar, mes_corte
 from .calc.modo1 import ConfigProjeto, Escolha, Fase, Opcoes, ResultadoWACC, calcular
 from .calc.registro import gravar_registro
-from .calc.variaveis import calcular_grupo, variaveis_do_grupo
+from .calc.variaveis import GRUPOS_VARIAVEIS, NOMES_GRUPOS, calcular_grupo, variaveis_do_grupo
 from .collector import Contexto, ResultadoColeta, executar
 from .config import resolver_bases_dir
 from .registry import carregar_todos
@@ -189,6 +189,33 @@ def linhas_bndes(amb: Ambiente) -> dict[str, str]:
             for r in df.itertuples()}
 
 
+# rótulo -> spread (fração decimal) ou None quando o valor é digitado à mão (planilha Santa Maria).
+SPREADS_PREDEFINIDOS: dict[str, float | None] = {
+    "Financ. BNDES": None,
+    "Outro": 0.0316,
+    "Hipotético BB+": 0.0178,
+    "Tx. Risco BNDES - Simulação": 0.0125,
+    "Fixo": 0.0300,
+}
+
+
+def empresas_do_setor(amb: Ambiente, setor: str, regiao: str) -> pd.DataFrame:
+    """Empresas do setor (``industry_group``) na edição mais recente de ``damodaran_empresas``.
+
+    Para ``regiao == "emerging"``, filtra ``broad_group == "Emerging Markets"``; para
+    ``"global"``, devolve todas as empresas do setor. Colunas: ``company_name``, ``country``,
+    ``exchange_ticker``, ``primary_sector``.
+    """
+    vs = versoes(amb, "damodaran_empresas")
+    if not vs:
+        raise FileNotFoundError("rode a atualização do Damodaran (empresas)")
+    df, _ = ler_serie(amb, "damodaran_empresas", vs[-1])
+    df = df[df["industry_group"] == setor]
+    if regiao == "emerging":
+        df = df[df["broad_group"] == "Emerging Markets"]
+    return df[["company_name", "country", "exchange_ticker", "primary_sector"]].reset_index(drop=True)
+
+
 # ------------------------------------------------------------------ projetos (configuração)
 def _toml_valor(v) -> str:
     if isinstance(v, bool):
@@ -318,6 +345,13 @@ def remover_janela(amb: Ambiente, espec: str) -> None:
     _gravar_janelas_usuario(amb, nova)
 
 
+def bases_de(amb: Ambiente) -> Bases:
+    """Uma instância de :class:`~.calc.fontes.Bases` (cache de séries em memória), para
+    reaproveitar entre várias chamadas de :func:`alternativas` na mesma tela (evita reler a
+    mesma série várias vezes ao montar as 8 tabelas de grupo)."""
+    return Bases(amb.repo)
+
+
 # ------------------------------------------------------------------ alternativas (Variável × Janela)
 def aplicar_escolha(cfg: ConfigProjeto, grupo: str, escolha: Escolha) -> ConfigProjeto:
     """Devolve uma cópia de ``cfg`` com a escolha do ``grupo`` substituída (para a tela aplicar
@@ -371,6 +405,50 @@ def alternativas(amb: Ambiente, cfg: ConfigProjeto, grupo: str, bases: Bases | N
     colunas = ["grupo", "variavel", "variavel_nome", "fonte", "janela_chave", "janela_espec", "janela_nome",
               "rotulo", "valor", "erro", "ativa", "escolha"]
     return pd.DataFrame(linhas, columns=colunas)
+
+
+_MESES_ABREV = ("jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez")
+
+
+def mes_corte_rotulo(data_base: date) -> str:
+    """Rótulo do mês de corte (ex.: 'dez/25'): toda janela termina nesse mês."""
+    p = mes_corte(data_base)
+    return f"{_MESES_ABREV[p.month - 1]}/{p.year % 100:02d}"
+
+
+def janela_periodo(cfg: ConfigProjeto, espec: str) -> str:
+    """Rótulo do período coberto por uma especificação de janela nesta data-base
+    (ex.: 'jul/25 a jun/26'), para compor a coluna "Janela/Obs" da tela."""
+    return interpretar(espec, mes_corte(cfg.data_base)).rotulo()
+
+
+def tem_texto(v) -> bool:
+    """Célula com texto de verdade. Em colunas que misturam textos e vazios o pandas guarda os
+    vazios como NaN, e NaN é "verdadeiro" em Python: nunca teste só ``if valor:``."""
+    return isinstance(v, str) and bool(v.strip())
+
+
+def tabela_alternativas_exibicao(cfg: ConfigProjeto, grupo: str, tabela: pd.DataFrame) -> pd.DataFrame:
+    """Tabela de :func:`alternativas` pronta para a tela, no formato da planilha:
+    Variável | Valor | Janela/Obs | Fonte | Ativa, mais a coluna ``erro`` (bool) para estilo e seleção."""
+    linhas = []
+    for r in tabela.itertuples():
+        erro = tem_texto(r.erro)
+        if erro:
+            obs = f"sem dados: {r.erro}"
+        elif tem_texto(r.janela_espec):
+            obs = f"{r.janela_nome} ({janela_periodo(cfg, r.janela_espec)})"
+        else:
+            obs = r.rotulo if tem_texto(r.rotulo) else ""
+        linhas.append({
+            "Variável": r.variavel_nome,
+            "Valor": "-" if erro or r.valor is None or pd.isna(r.valor) else formatar_valor_componente(grupo, r.valor),
+            "Janela/Obs": obs,
+            "Fonte": r.fonte,
+            "Ativa": "✓" if bool(r.ativa) else "",
+            "erro": erro,
+        })
+    return pd.DataFrame(linhas, columns=["Variável", "Valor", "Janela/Obs", "Fonte", "Ativa", "erro"])
 
 
 # ------------------------------------------------------------------ cálculo e histórico

@@ -274,3 +274,64 @@ def test_indicadores_painel_sem_dados_nao_quebra(amb, repo):
     tlp = next(i for i in indicadores if i["nome"] == "TLP")
     assert tlp["status"] == "sem_dados"
     assert all(i["status"] == "ok" for i in indicadores if i["nome"] != "TLP")
+
+
+def test_spreads_predefinidos():
+    assert sv.SPREADS_PREDEFINIDOS["Financ. BNDES"] is None  # digitado à mão
+    assert sv.formatar_percentual_pt(sv.SPREADS_PREDEFINIDOS["Outro"], 2) == "3,16%"
+    assert sv.formatar_percentual_pt(sv.SPREADS_PREDEFINIDOS["Hipotético BB+"], 2) == "1,78%"
+    assert sv.formatar_percentual_pt(sv.SPREADS_PREDEFINIDOS["Tx. Risco BNDES - Simulação"], 2) == "1,25%"
+    assert sv.formatar_percentual_pt(sv.SPREADS_PREDEFINIDOS["Fixo"], 2) == "3,00%"
+
+
+def test_empresas_do_setor(amb, repo):
+    df = pd.DataFrame({
+        "company_name": ["Empresa A", "Empresa B", "Empresa C"],
+        "exchange_ticker": ["NYSE:A", "NYSE:B", "BOVESPA:C"],
+        "industry_group": ["Setor A", "Setor A", "Setor B"],
+        "primary_sector": ["Industrial", "Industrial", "Financials"],
+        "sic_code": [1000, 1001, 6000],
+        "country": ["United States", "Brazil", "Brazil"],
+        "broad_group": ["United States", "Emerging Markets", "Emerging Markets"],
+        "sub_group": ["", "", ""],
+    })
+    m1._gravar(repo, "damodaran_empresas", df, "2025-01")
+
+    global_ = sv.empresas_do_setor(amb, "Setor A", "global")
+    assert sorted(global_["company_name"]) == ["Empresa A", "Empresa B"]
+
+    emerging = sv.empresas_do_setor(amb, "Setor A", "emerging")
+    assert list(emerging["company_name"]) == ["Empresa B"]
+
+    assert sv.empresas_do_setor(amb, "Setor B", "global")["company_name"].iloc[0] == "Empresa C"
+
+
+def test_empresas_do_setor_sem_serie(amb):
+    with pytest.raises(FileNotFoundError, match="Damodaran"):
+        sv.empresas_do_setor(amb, "Setor A", "global")
+
+
+def test_mes_corte_rotulo_e_janela_periodo(amb):
+    cfg = m1._cfg()  # data_base = date(2026, 1, 16) -> corte = dez/25
+    assert sv.mes_corte_rotulo(cfg.data_base) == "dez/25"
+    assert sv.janela_periodo(cfg, "12m") == "jan/25 a dez/25"
+
+
+def test_tabela_alternativas_exibicao_nan_nao_e_erro():
+    """Regressão: com as bases reais, a coluna 'erro' mistura textos e NaN; NaN não é erro
+    (antes, todas as linhas da tela Montar cenário mostravam "-" e "None")."""
+    import numpy as np
+    import pandas as pd
+
+    cfg = m1._cfg(data_base=date(2026, 7, 1))
+    tabela = pd.DataFrame({
+        "variavel_nome": ["T-10", "T-10", "T-bond"], "fonte": ["FRED", "FRED", "Damodaran"],
+        "janela_espec": ["12m", "24m", "12m"], "janela_nome": ["12 meses", "24 meses", "12 meses"],
+        "rotulo": ["r1", "r2", np.nan], "valor": [0.0424, 0.0425, np.nan],
+        "erro": [np.nan, np.nan, "faltam os anos [2026]"], "ativa": [True, False, False]})
+    out = sv.tabela_alternativas_exibicao(cfg, "rf", tabela)
+    assert list(out["Valor"]) == ["4,24%", "4,25%", "-"]
+    assert out.loc[0, "Janela/Obs"] == "12 meses (jul/25 a jun/26)"
+    assert out.loc[2, "Janela/Obs"].startswith("sem dados:")
+    assert list(out["erro"]) == [False, False, True] and out.loc[0, "Ativa"] == "✓"
+    assert not out["Janela/Obs"].str.contains("None").any()

@@ -18,7 +18,7 @@ pagina = st.navigation(
     [
         st.Page(_PAGINAS / "historico.py", title="Histórico", url_path="historico", default=True),
         st.Page(_PAGINAS / "painel.py", title="Painel", url_path="painel"),
-        st.Page(_PAGINAS / "novo_wacc.py", title="Novo WACC", url_path="novo-wacc"),
+        st.Page(_PAGINAS / "montar_cenario.py", title="Montar cenário", url_path="montar-cenario"),
         st.Page(_PAGINAS / "consulta.py", title="Consulta", url_path="consulta"),
         st.Page(_PAGINAS / "bases.py", title="Bases", url_path="bases"),
     ]

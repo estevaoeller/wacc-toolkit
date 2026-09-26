@@ -138,6 +138,47 @@ def indicadores_painel_cacheados(amb: sv.Ambiente, meses: int = 24) -> list[dict
     return _indicadores_painel_no_cache(str(amb.bases), meses, assinatura)
 
 
+# ------------------------------------------------------------------ alternativas (Montar cenário)
+def _assinatura_bases(amb: sv.Ambiente) -> float:
+    """Assinatura grosseira do conteúdo das bases tratadas (maior mtime dos CSVs): muda sempre que
+    alguma base é atualizada, então basta para invalidar o cache de `alternativas` sem precisar
+    descobrir, uma a uma, quais séries cada variável do catálogo usa."""
+    pasta = amb.bases / "tratado"
+    if not pasta.exists():
+        return 0.0
+    return max((p.stat().st_mtime for p in pasta.rglob("*.csv")), default=0.0)
+
+
+def _chave_config_grupo(cfg: sv.ConfigProjeto, grupo: str) -> tuple:
+    """Só as partes de ``cfg`` que afetam ``alternativas(grupo)``: a data-base/Focus (toda janela
+    depende do corte), a região e as fases (usadas por d_v) e a escolha ATUAL do próprio grupo (a
+    linha "ativa" da tabela) - nunca a escolha de outro grupo, para não invalidar o cache dos
+    outros 7 grupos quando só este muda."""
+    esc = cfg.variaveis.get(grupo)
+    esc_chave = (esc.variavel, tuple(sorted((esc.janelas or {}).items())),
+                tuple(sorted((esc.params or {}).items()))) if esc else None
+    fases_chave = tuple((f.setor, f.peso, f.fase, f.base_peso) for f in cfg.fases)
+    return (cfg.data_base, cfg.focus_relatorio, cfg.regiao, fases_chave, esc_chave)
+
+
+@st.cache_data(show_spinner=False)
+def _alternativas_no_cache(bases_dir: str, grupo: str, chave_grupo: tuple, assinatura_janelas: tuple,
+                           assinatura_bases: float, _cfg, _bases) -> pd.DataFrame:
+    amb = sv.ambiente(bases_dir)
+    return sv.alternativas(amb, _cfg, grupo, bases=_bases)
+
+
+def alternativas_cacheadas(amb: sv.Ambiente, cfg: sv.ConfigProjeto, grupo: str, bases=None) -> pd.DataFrame:
+    """Como ``sv.alternativas``, cacheado por (bases, data-base/Focus/fases/escolha do grupo,
+    catálogo de janelas, conteúdo das bases): mudar a escolha de só um grupo não invalida o cache
+    dos outros 7. ``cfg``/``bases`` não entram na chave (prefixo ``_``): usadas só para reler de
+    fato, em caso de cache miss, reaproveitando as séries já lidas por outros grupos na mesma tela."""
+    chave_grupo = _chave_config_grupo(cfg, grupo)
+    assinatura_janelas = tuple((j["espec"], j["nome"]) for j in sv.listar_janelas(amb))
+    assinatura_bases = _assinatura_bases(amb)
+    return _alternativas_no_cache(str(amb.bases), grupo, chave_grupo, assinatura_janelas, assinatura_bases, cfg, bases)
+
+
 # ------------------------------------------------------------------ gráfico padrão (pt-BR)
 _LOCALE_PT_BR = {
     "number": {"decimal": ",", "thousands": ".", "grouping": [3], "currency": ["R$ ", ""]},
