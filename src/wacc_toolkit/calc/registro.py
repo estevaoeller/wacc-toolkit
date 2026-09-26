@@ -41,8 +41,15 @@ def gravar_registro(resultado: ResultadoWACC, pasta: Path) -> Path:
     caminho, n = pasta / f"{base}.json", 2
     while caminho.exists() or caminho.with_suffix(".xlsx").exists():  # dois cálculos no mesmo segundo
         caminho, n = pasta / f"{base}_{n}.json", n + 1
-    caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2, default=float), encoding="utf-8")
+    caminho.write_text(json.dumps(dados, ensure_ascii=False, indent=2, default=_json_padrao), encoding="utf-8")
     return caminho
+
+
+def _json_padrao(v):
+    """Datas viram ISO; números numpy viram float."""
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return float(v)
 
 
 @dataclass

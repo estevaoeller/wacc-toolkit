@@ -198,7 +198,10 @@ def _toml_valor(v) -> str:
 
 
 def config_para_toml(cfg: ConfigProjeto) -> str:
-    linhas = [f"projeto = {_toml_valor(cfg.projeto)}", f"data_base = {_toml_valor(cfg.data_base)}"]
+    linhas = [f"projeto = {_toml_valor(cfg.projeto)}",
+              f"data_base = {_toml_valor(cfg.data_base)}          # mês/ano (dia 1º)"]
+    if cfg.focus_relatorio:
+        linhas.append(f"focus_relatorio = {_toml_valor(cfg.focus_relatorio)}   # último relatório Focus considerado")
     if cfg.notas:
         linhas.append(f"notas = {_toml_valor(cfg.notas)}")
     linhas += ["", "[beta]", f"regiao = {_toml_valor(cfg.regiao)}", "fases = ["]
@@ -212,6 +215,10 @@ def config_para_toml(cfg: ConfigProjeto) -> str:
     if cfg.spread_fonte:
         linhas.append(f"spread_fonte = {_toml_valor(cfg.spread_fonte)}")
     linhas += ["", "[opcoes]"] + [f"{k} = {_toml_valor(v)}" for k, v in asdict(cfg.opcoes).items()]
+    # escolhas Variável × Janela por grupo (prevalecem sobre [opcoes] na leitura)
+    for grupo, esc in cfg.variaveis.items():
+        linhas += ["", f"[variaveis.{grupo}]", f"variavel = {_toml_valor(esc.variavel)}"]
+        linhas += [f"{k} = {_toml_valor(v)}" for k, v in {**esc.janelas, **esc.params}.items()]
     return "\n".join(linhas) + "\n"
 
 

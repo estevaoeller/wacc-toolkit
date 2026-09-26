@@ -58,7 +58,61 @@ class Opcoes:
 
 
 @dataclass
+class Escolha:
+    """Escolha de um grupo do WACC: qual variável (método + fonte), com quais janelas e parâmetros.
+
+    ``janelas`` usa as chaves da definição da variável (ex.: ``{"janela": "12m"}`` ou
+    ``{"janela_cds": "120m", "janela_vol": "60m"}``). Ver ``calc/variaveis.py``.
+    """
+
+    variavel: str
+    janelas: dict[str, str] = field(default_factory=dict)
+    params: dict = field(default_factory=dict)
+
+
+def escolhas_de_opcoes(op: Opcoes) -> dict[str, Escolha]:
+    """Converte as opções no formato antigo (``[opcoes]``) nas escolhas por grupo."""
+    return {
+        "rf": Escolha("t10_media_mensal", {"janela": op.rf_janela}),
+        "rf_estrutural": Escolha("t10_media_mensal", {"janela": op.rf_estrutural_janela}),
+        "rm": Escolha("sp500tr_ln_mensal" if op.rm_metodo == "ln_mensal" else "sp500tr_retorno_anual",
+                      {"janela": op.rm_janela}),
+        "risco_brasil": Escolha("cds10_vol_ibov_ntnb", {"janela_cds": op.cds_janela, "janela_vol": op.vol_janela},
+                                {"ntnb_vencimento": op.ntnb_vencimento}),
+        "inflacao_us": Escolha("implicita_gs10_fii10", {"janela": op.inflacao_us_janela}),
+        "tlp": Escolha("tlp_sgs27572", {"janela": op.tlp_janela}),
+        "ipca": Escolha("focus_ipca_mediana", {}, {"anos": op.ipca_anos, "base_calculo": 0}),
+        "d_v": Escolha("damodaran_setores", {}, {"coluna": op.de_coluna}),
+    }
+
+
+def _sincronizar_opcoes(op: Opcoes, esc: dict[str, Escolha]) -> Opcoes:
+    """Mantém as opções no formato antigo coerentes com as escolhas. Usadas nos textos do Excel."""
+    d = asdict(op)
+    j = lambda g, k="janela": esc[g].janelas.get(k) if g in esc else None  # noqa: E731
+    pares = {"rf_janela": j("rf"), "rf_estrutural_janela": j("rf_estrutural"), "rm_janela": j("rm"),
+             "cds_janela": j("risco_brasil", "janela_cds"), "vol_janela": j("risco_brasil", "janela_vol"),
+             "inflacao_us_janela": j("inflacao_us"), "tlp_janela": j("tlp")}
+    d.update({k: v for k, v in pares.items() if v})
+    if "rm" in esc:
+        d["rm_metodo"] = "anual" if esc["rm"].variavel == "sp500tr_retorno_anual" else "ln_mensal"
+    if "risco_brasil" in esc and esc["risco_brasil"].params.get("ntnb_vencimento"):
+        d["ntnb_vencimento"] = esc["risco_brasil"].params["ntnb_vencimento"]
+    if "ipca" in esc and "anos" in esc["ipca"].params:
+        d["ipca_anos"] = int(esc["ipca"].params["anos"])
+    return Opcoes(**d)
+
+
+@dataclass
 class ConfigProjeto:
+    """Configuração de um projeto.
+
+    ``data_base`` é um **mês/ano**, gravado como o dia 1º do mês. O dia importa só para o Focus,
+    via ``focus_relatorio``: o último relatório até essa data. Se vazio, usa-se o último relatório
+    até o fim do mês-base. Configurações antigas com dia ≠ 1 são convertidas: o mês vira a
+    data-base e a data completa vira ``focus_relatorio``.
+    """
+
     projeto: str
     data_base: date
     fases: list[Fase]
@@ -69,6 +123,8 @@ class ConfigProjeto:
     spread_fonte: str = ""                 # texto da nota de fonte do spread
     opcoes: Opcoes = field(default_factory=Opcoes)
     notas: str = ""
+    variaveis: dict[str, Escolha] = field(default_factory=dict)
+    focus_relatorio: date | None = None
 
     def __post_init__(self):
         soma = sum(f.peso for f in self.fases)
@@ -76,6 +132,20 @@ class ConfigProjeto:
             raise ValueError(f"pesos das fases devem somar 1 (soma = {soma})")
         if self.regiao not in ("global", "emerging"):
             raise ValueError("regiao deve ser 'global' ou 'emerging'")
+        if self.data_base.day != 1:
+            if self.focus_relatorio is None:
+                self.focus_relatorio = self.data_base
+            self.data_base = self.data_base.replace(day=1)
+        base = escolhas_de_opcoes(self.opcoes)
+        self.variaveis = {**base, **(self.variaveis or {})}
+        self.opcoes = _sincronizar_opcoes(self.opcoes, self.variaveis)
+
+    @property
+    def data_focus(self) -> date:
+        """Último dia considerado para o relatório Focus."""
+        if self.focus_relatorio:
+            return self.focus_relatorio
+        return (pd.Timestamp(self.data_base) + pd.offsets.MonthEnd(0)).date()
 
     @classmethod
     def de_toml(cls, caminho: str | Path) -> "ConfigProjeto":
@@ -84,7 +154,17 @@ class ConfigProjeto:
     @classmethod
     def de_toml_texto(cls, texto: str) -> "ConfigProjeto":
         d = tomllib.loads(texto)
+        variaveis = {}
+        for grupo, bloco in (d.get("variaveis") or {}).items():
+            bloco = dict(bloco)
+            variavel = bloco.pop("variavel")
+            janelas = {k: v for k, v in bloco.items() if k.startswith("janela")}
+            params = {k: v for k, v in bloco.items() if not k.startswith("janela")}
+            variaveis[grupo] = Escolha(variavel, janelas, params)
+        fr = d.get("focus_relatorio")
         return cls(
+            variaveis=variaveis,
+            focus_relatorio=fr if isinstance(fr, date) or fr is None else date.fromisoformat(fr),
             projeto=d["projeto"],
             data_base=d["data_base"] if isinstance(d["data_base"], date) else date.fromisoformat(d["data_base"]),
             fases=[Fase(**f) for f in d["beta"]["fases"]],
@@ -320,11 +400,16 @@ def tlp(bases: Bases, corte: pd.Period, espec: str) -> Componente:
                       {"n_meses": len(s)})
 
 
-def ipca_focus(bases: Bases, data_base: date, anos: int) -> Componente:
+def ipca_focus(bases: Bases, data_base: date, anos: int, data_focus: date | None = None,
+               base_calculo: int = 0) -> Componente:
+    """Média das medianas Focus de ``anos`` anos a partir do ano da data-base, no último relatório
+    até ``data_focus`` (padrão: a própria ``data_base``). ``base_calculo``: 0 = últimos 30 dias,
+    1 = últimos 5 dias úteis."""
+    data_focus = data_focus or data_base
     df, meta = bases.ler("bcb_focus_ipca_anual")
-    df = df[(df["base_calculo"] == 0) & (df["data"] <= pd.Timestamp(data_base))]
+    df = df[(df["base_calculo"] == base_calculo) & (df["data"] <= pd.Timestamp(data_focus))]
     if df.empty:
-        raise ValueError("Focus: nenhum relatório até a data-base")
+        raise ValueError(f"Focus: nenhum relatório até {data_focus:%d/%m/%Y}")
     dia = df["data"].max()
     rel = df[df["data"] == dia].set_index("ano_referencia")["mediana"].sort_index()
     serie, ultimo = [], None
@@ -339,7 +424,8 @@ def ipca_focus(bases: Bases, data_base: date, anos: int) -> Componente:
     return Componente("ipca", "IPCA (Focus)", float(np.mean(valores)) / 100,
                       f"média das medianas Focus {data_base.year}–{data_base.year + anos - 1} (anos sem projeção repetem o último)",
                       f"Focus de {dia.date():%d/%m/%Y}, {anos} anos", None,
-                      [bases.recorte("focus", "bcb_focus_ipca_anual", usados, meta, "Focus IPCA anual, mediana, base 0")],
+                      [bases.recorte("focus", "bcb_focus_ipca_anual", usados, meta,
+                                     f"Focus IPCA anual, mediana, base {base_calculo}")],
                       {"relatorio": str(dia.date()), "anos": [{"ano": a, "ipca": v, "projetado": p} for a, v, p in serie]})
 
 
@@ -379,20 +465,18 @@ NOMES = {
 
 
 def calcular(cfg: ConfigProjeto, bases: Bases) -> ResultadoWACC:
+    from .variaveis import GRUPOS_VARIAVEIS, calcular_grupo
+
     op = cfg.opcoes
     corte = mes_corte(cfg.data_base)
     c: dict[str, Componente] = {}
 
-    # insumos (cada um com janela, rótulo e recortes)
-    c["rf"] = rf(bases, corte, op.rf_janela)
-    c["rf_estrutural"] = rf(bases, corte, op.rf_estrutural_janela, "rf_estrutural", "Taxa livre de risco estrutural (R'f)")
-    c["rm"] = rm(bases, corte, op.rm_metodo, op.rm_janela)
-    c["risco_brasil"] = risco_brasil(bases, corte, op)
-    c["beta_u"], c["d_v"] = beta_estrutura(bases, cfg)
+    # insumos com variável × janela escolhidas (ver calc/variaveis.py)
+    for grupo in GRUPOS_VARIAVEIS:
+        c[grupo] = calcular_grupo(bases, cfg, corte, grupo, cfg.variaveis[grupo])
+    c["beta_u"], _ = beta_estrutura(bases, cfg)
     t, rec_t, lt = _parametro(bases, op.ir_parametro)
     c["t"] = Componente("t", "Alíquota IR/CSLL (T)", t, "parâmetro manual", lt["fonte"], None, [rec_t])
-    c["inflacao_us"] = inflacao_us(bases, corte, op.inflacao_us_janela)
-    c["tlp"] = tlp(bases, corte, op.tlp_janela)
     rem, rec_r, lr = _parametro(bases, cfg.linha_bndes)
     c["remuneracao_bndes"] = Componente("remuneracao_bndes", "Remuneração básica BNDES", rem, "parâmetro manual",
                                         lr["fonte"], None, [rec_r], {"linha": cfg.linha_bndes,
@@ -400,7 +484,6 @@ def calcular(cfg: ConfigProjeto, bases: Bases) -> ResultadoWACC:
     c["spread_credito"] = Componente("spread_credito", "Taxa de risco de crédito", cfg.spread_credito,
                                      "entrada do projeto", cfg.spread_descricao or "informado pelo projeto",
                                      detalhes={"fonte": cfg.spread_fonte})
-    c["ipca"] = ipca_focus(bases, cfg.data_base, op.ipca_anos)
 
     # composição (fórmulas da planilha)
     comp = compor(rf=c["rf"].valor, rf_estrutural=c["rf_estrutural"].valor, rm=c["rm"].valor,

@@ -75,14 +75,46 @@ def desde(inicio: str, corte: pd.Period) -> Janela:
 def interpretar(especificacao: str, corte: pd.Period) -> Janela:
     """Converte a especificação textual de uma opção em janela.
 
-    ``"12m"`` → últimos 12 meses; ``"30a"`` → últimos 30 anos-calendário completos;
-    ``"desde:1995-01"`` → de jan/1995 até o corte.
+    - ``"12m"``: últimos 12 meses;
+    - ``"30a"``: últimos 30 anos-calendário completos;
+    - ``"desde:1995-01"``: de jan/1995 até o corte;
+    - ``"intervalo:2016-01:2025-12"``: intervalo fixo, que **não** acompanha a data-base.
+      O fim é limitado ao corte, porque não se usa dado posterior ao último mês fechado.
     """
     e = especificacao.strip().lower()
+    if e.startswith("intervalo:"):
+        _, ini, fim = e.split(":")
+        j = Janela(pd.Period(ini, "M"), min(pd.Period(fim, "M"), corte))
+        return j
     if e.startswith("desde:"):
         return desde(e.split(":", 1)[1], corte)
     if e.endswith("m") and e[:-1].isdigit():
         return ultimos_meses(corte, int(e[:-1]))
     if e.endswith("a") and e[:-1].isdigit():
         return ultimos_anos(corte, int(e[:-1]))
-    raise ValueError(f"janela não reconhecida: {especificacao!r} (use '12m', '30a' ou 'desde:AAAA-MM')")
+    raise ValueError(f"janela não reconhecida: {especificacao!r} "
+                     "(use '12m', '30a', 'desde:AAAA-MM' ou 'intervalo:AAAA-MM:AAAA-MM')")
+
+
+def acompanha_data_base(especificacao: str) -> bool:
+    return not especificacao.strip().lower().startswith("intervalo:")
+
+
+def descrever(especificacao: str) -> str:
+    """Nome legível de uma especificação: '12m' → '12 meses', '30a' → '30 anos'."""
+    e = especificacao.strip().lower()
+    if e.startswith("intervalo:"):
+        _, ini, fim = e.split(":")
+        return f"de {_mmm_aa(pd.Period(ini, 'M'))} a {_mmm_aa(pd.Period(fim, 'M'))} (fixo)"
+    if e.startswith("desde:"):
+        return f"desde {_mmm_aa(pd.Period(e.split(':', 1)[1], 'M'))}"
+    if e.endswith("m") and e[:-1].isdigit():
+        n = int(e[:-1])
+        return f"{n} meses" + (f" ({n // 12} anos)" if n >= 24 and n % 12 == 0 else "")
+    if e.endswith("a") and e[:-1].isdigit():
+        return f"{int(e[:-1])} anos-calendário"
+    return especificacao
+
+
+# Catálogo padrão de janelas. O usuário acrescenta as suas em Projetos/_janelas.toml.
+JANELAS_PADRAO: tuple[str, ...] = ("12m", "24m", "60m", "120m", "10a", "26a", "28a", "30a", "desde:1995-01")
