@@ -5,6 +5,7 @@ Streamlit (não há como injetar o conteúdo de um arquivo enviado); a lógica d
 em si já é testada diretamente em ``test_servicos.py::test_importar_arquivos_so_fontes_manuais``.
 """
 
+import re
 from datetime import date
 from pathlib import Path
 
@@ -71,16 +72,28 @@ def test_pagina_historico_carrega_vazia(bases_dir):
     assert "Nenhum cálculo gravado ainda." in "\n".join(i.value for i in at.info)
 
 
-def test_novo_wacc_calcula_e_aparece_no_historico(bases_dir, repo):
-    """Preenche um projeto válido (mesmo cenário de test_calc_modo1._cfg) e calcula."""
-    # As bases sintéticas não têm nenhuma linha "bndes_rem*"; acrescenta uma para o formulário
-    # poder oferecer uma linha BNDES selecionável (linhas_bndes() filtra por esse prefixo).
-    m1._gravar(repo, "parametros_manuais", pd.DataFrame({
-        "parametro": ["ir_csll", "rem_x", "bndes_rem_teste"], "valor": [34.0, 1.5, 1.3],
-        "unidade": "%", "fonte": "teste", "verificado_em": "2026-01-01", "responsavel": "", "notas": ""}))
+def test_pagina_painel_mostra_indicadores(bases_dir):
+    at = _rodar("painel.py")
+    assert not at.exception
+    blocos = "\n".join(m.value for m in at.markdown)
+    for nome in ("Treasury 10 anos", "CDS Brasil 10 anos", "Ibovespa", "S&P 500 Total Return", "TLP"):
+        assert nome in blocos, f"indicador {nome!r} não apareceu no painel"
+    assert "Nenhum cálculo gravado ainda" in "\n".join(i.value for i in at.info)
 
-    at = _rodar("novo_wacc.py")
-    at.text_input(key="nw_projeto").set_value("Projeto Teste App")
+
+def test_pagina_painel_mostra_ultimos_calculos(bases_dir):
+    amb = sv.ambiente(bases_dir)
+    sv.calcular_projeto(amb, m1._cfg(projeto="Projeto Painel"), excel=False)
+    at = _rodar("painel.py")
+    assert not at.exception
+    blocos = "\n".join(m.value for m in at.markdown)
+    assert "WACC real" in blocos and re.search(r"\d+,\d{2}%", blocos)
+    textos = "\n".join(i.value for i in at.markdown)
+    assert "Projeto Painel" in textos
+
+
+def _preencher_projeto_valido(at: AppTest, projeto: str = "Projeto Teste App") -> AppTest:
+    at.text_input(key="nw_projeto").set_value(projeto)
     at.date_input(key="nw_data_base").set_value(date(2026, 1, 16))
     at.run()
     assert not at.exception
@@ -96,13 +109,31 @@ def test_novo_wacc_calcula_e_aparece_no_historico(bases_dir, repo):
 
     at.selectbox(key="nw_fase_setor_1").set_value("Setor B")
     at.number_input(key="nw_fase_peso_1").set_value(60.0)
-    at.selectbox(key="nw_linha_bndes_sel").set_value("bndes_rem_teste")
+    at.selectbox(key="nw_linha_bndes_sel").set_value("teste (1,30% a.a.)")
     at.number_input(key="nw_spread").set_value(1.0)
     at.run()
     assert not at.exception
+    return at
+
+
+def test_novo_wacc_previa_nao_grava_e_gerar_versao_grava(bases_dir, repo):
+    """'Calcular' é só uma prévia (não cria arquivo nenhum); 'Gerar versão' grava o JSON e o
+    Excel, com o mesmo valor da prévia, e o cálculo passa a aparecer no Histórico."""
+    # As bases sintéticas não têm nenhuma linha "bndes_rem*"; acrescenta uma para o formulário
+    # poder oferecer uma linha BNDES selecionável (linhas_bndes() filtra por esse prefixo).
+    m1._gravar(repo, "parametros_manuais", pd.DataFrame({
+        "parametro": ["ir_csll", "rem_x", "bndes_rem_teste"], "valor": [34.0, 1.5, 1.3],
+        "unidade": "%", "fonte": "teste", "verificado_em": "2026-01-01", "responsavel": "", "notas": ""}))
+
+    amb = sv.ambiente(bases_dir)
+    at = _preencher_projeto_valido(_rodar("novo_wacc.py"))
 
     soma = "\n".join([i.value for i in at.success] + [i.value for i in at.error])
     assert "100,00%" in soma
+
+    # "Gerar versão" começa desabilitado: ainda não há prévia
+    assert at.button(key="nw_botao_gerar").disabled
+    assert list(amb.calculos.glob("*")) == []
 
     at.button(key="nw_botao_calcular").click()
     at.run()
@@ -110,12 +141,53 @@ def test_novo_wacc_calcula_e_aparece_no_historico(bases_dir, repo):
 
     metricas = {m.label: m.value for m in at.metric}
     assert "WACC real" in metricas and metricas["WACC real"].endswith("%")
+    # a prévia não grava nada em Calculos/
+    assert list(amb.calculos.glob("*")) == []
+    assert not at.button(key="nw_botao_gerar").disabled
+
+    at.button(key="nw_botao_gerar").click()
+    at.run()
+    assert not at.exception, at.exception[0].value if at.exception else None
+    assert len(list(amb.calculos.glob("*.json"))) == 1
+    assert len(list(amb.calculos.glob("*.xlsx"))) == 1
+
+    # o valor gravado é idêntico ao da prévia
+    [arquivo_json] = amb.calculos.glob("*.json")
+    dados = sv.ler_calculo(amb, arquivo_json.name)
+    assert dados["componentes"]["wacc_real"]["valor"] == pytest.approx(
+        float(metricas["WACC real"].rstrip("%").replace(".", "").replace(",", ".")) / 100, abs=1e-3)
 
     # o cálculo foi gravado em disco; a página Histórico (nova sessão) deve listá-lo
     at_hist = _rodar("historico.py")
     assert not at_hist.exception
     tabela = at_hist.dataframe[0].value
     assert "Projeto Teste App" in list(tabela["Projeto"])
+
+
+def test_novo_wacc_mudar_campo_desatualiza_previa(bases_dir, repo):
+    """Mudar um campo depois da prévia mostra o aviso e desabilita 'Gerar versão' até recalcular."""
+    m1._gravar(repo, "parametros_manuais", pd.DataFrame({
+        "parametro": ["ir_csll", "rem_x", "bndes_rem_teste"], "valor": [34.0, 1.5, 1.3],
+        "unidade": "%", "fonte": "teste", "verificado_em": "2026-01-01", "responsavel": "", "notas": ""}))
+
+    at = _preencher_projeto_valido(_rodar("novo_wacc.py"))
+    at.button(key="nw_botao_calcular").click()
+    at.run()
+    assert not at.exception
+    assert not at.button(key="nw_botao_gerar").disabled
+
+    at.number_input(key="nw_spread").set_value(2.0)
+    at.run()
+    assert not at.exception
+
+    avisos = "\n".join(i.value for i in at.warning)
+    assert "desatualizada" in avisos
+    assert at.button(key="nw_botao_gerar").disabled
+
+    at.button(key="nw_botao_calcular").click()
+    at.run()
+    assert not at.exception
+    assert not at.button(key="nw_botao_gerar").disabled
 
 
 def test_novo_wacc_nome_arquivo_preenchido_ao_carregar(bases_dir):
@@ -161,7 +233,7 @@ def _todos_os_textos(at: AppTest) -> list[str]:
     return textos
 
 
-@pytest.mark.parametrize("pagina", ["bases.py", "consulta.py", "novo_wacc.py", "historico.py"])
+@pytest.mark.parametrize("pagina", ["bases.py", "consulta.py", "novo_wacc.py", "historico.py", "painel.py"])
 def test_nenhum_travessao_na_interface(bases_dir, pagina):
     at = _rodar(pagina)
     assert not at.exception

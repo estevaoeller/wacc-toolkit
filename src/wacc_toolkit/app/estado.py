@@ -106,3 +106,69 @@ def fmt_datahora_local_pt(iso_utc: str | None) -> str:
 def csv_excel_br(df: pd.DataFrame) -> bytes:
     """CSV com separador ';' e decimal ',', para abrir direto no Excel em pt-BR."""
     return df.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
+
+
+# ------------------------------------------------------------------ cache de leitura das bases
+# st.cache_data guarda o resultado por chave; usamos (série, versão, sha256_csv) - o sha vem de
+# um metadado leve (sv.meta_serie não lê o CSV), então só relemos o CSV grande quando o conteúdo
+# realmente mudou, mesmo que a página seja reaberta várias vezes na mesma sessão do servidor.
+@st.cache_data(show_spinner=False)
+def _ler_serie_no_cache(bases_dir: str, serie: str, versao: str | None, sha256_csv: str | None):
+    amb = sv.ambiente(bases_dir)
+    return sv.ler_serie(amb, serie, versao)
+
+
+def ler_serie_cacheada(amb: sv.Ambiente, serie: str, versao: str | None = None) -> tuple[pd.DataFrame, dict]:
+    meta = sv.meta_serie(amb, serie, versao)
+    return _ler_serie_no_cache(str(amb.bases), serie, versao, meta.get("sha256_csv"))
+
+
+@st.cache_data(show_spinner=False)
+def _indicadores_painel_no_cache(bases_dir: str, meses: int, assinatura: tuple):
+    amb = sv.ambiente(bases_dir)
+    return sv.indicadores_painel(amb, meses)
+
+
+def indicadores_painel_cacheados(amb: sv.Ambiente, meses: int = 24) -> list[dict]:
+    """Como ``sv.indicadores_painel``, cacheado pela assinatura (sha256) dos metadados das
+    séries envolvidas - recalcula só quando alguma base usada pelo painel muda."""
+    series = ("fred_gs10", "fred_fii10", "investing_cds10_brasil_mensal", "b3_ibov", "yahoo_sp500tr",
+             "tesouro_td_taxas", "bcb_tlp", "bcb_focus_ipca_anual")
+    assinatura = tuple(sv.meta_serie(amb, s).get("sha256_csv") for s in series)
+    return _indicadores_painel_no_cache(str(amb.bases), meses, assinatura)
+
+
+# ------------------------------------------------------------------ gráfico padrão (pt-BR)
+_LOCALE_PT_BR = {
+    "number": {"decimal": ",", "thousands": ".", "grouping": [3], "currency": ["R$ ", ""]},
+    "time": {
+        "dateTime": "%A, %e de %B de %Y. %X", "date": "%d/%m/%Y", "time": "%H:%M:%S",
+        "periods": ["AM", "PM"],
+        "days": ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"],
+        "shortDays": ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"],
+        "months": ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto",
+                   "Setembro", "Outubro", "Novembro", "Dezembro"],
+        "shortMonths": ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"],
+    },
+}
+
+
+def grafico_linha(df, x: str = "data", y: str = "valor", altura: int = 260, titulo_y: str = ""):
+    """Gráfico de linha com eixos em pt-BR (meses abreviados, vírgula decimal, ponto de milhar)
+    e escala vertical ajustada aos dados (não começa em zero)."""
+    import altair as alt
+
+    dados = df[[x, y]].dropna().copy()
+    dados[x] = pd.to_datetime(dados[x])
+    return (
+        alt.Chart(dados)
+        .mark_line(strokeWidth=1.8)
+        .encode(
+            x=alt.X(f"{x}:T", title=None, axis=alt.Axis(format="%b/%y", labelAngle=0, tickCount=6)),
+            y=alt.Y(f"{y}:Q", title=titulo_y or None, scale=alt.Scale(zero=False), axis=alt.Axis(format=",.2~f")),
+            tooltip=[alt.Tooltip(f"{x}:T", title="Data", format="%d/%m/%Y"),
+                     alt.Tooltip(f"{y}:Q", title=titulo_y or "Valor", format=",.2f")],
+        )
+        .properties(height=altura)
+        .configure(locale=_LOCALE_PT_BR)
+    )

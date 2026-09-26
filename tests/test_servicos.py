@@ -124,3 +124,59 @@ def test_linhas_bndes_sem_id_tecnico(amb, repo):
         "verificado_em": "2026-01-01", "responsavel": "", "notas": ""}))
     linhas = sv.linhas_bndes(amb)
     assert linhas == {"bndes_rem_teste": "Finem: Água, esgoto e resíduos sólidos (1,30% a.a.)"}
+
+
+def test_calcular_previa_nao_grava_e_e_identica_ao_gerado(amb):
+    """calcular_previa não cria nenhum arquivo; o valor é idêntico ao de calcular_projeto."""
+    cfg = m1._cfg()
+    antes = list(amb.calculos.glob("*"))
+    previa = sv.calcular_previa(amb, cfg)
+    assert list(amb.calculos.glob("*")) == antes  # nada gravado
+
+    gerado = sv.calcular_projeto(amb, cfg, excel=False)
+    for cid, comp in previa.componentes.items():
+        assert comp.valor == pytest.approx(gerado.resultado.componentes[cid].valor)
+    assert previa["wacc_real"] == pytest.approx(gerado.resultado["wacc_real"])
+    assert previa["wacc_nominal"] == pytest.approx(gerado.resultado["wacc_nominal"])
+
+
+def test_ultimos_calculos_por_projeto(amb):
+    import time
+
+    sv.calcular_projeto(amb, m1._cfg(projeto="A"), excel=False)
+    time.sleep(1.1)  # 'gerado_em' só tem precisão de segundo: garante que o 2º cálculo é "depois"
+    ultimo_a = sv.calcular_projeto(amb, m1._cfg(projeto="A", spread_credito=0.02), excel=False)
+    sv.calcular_projeto(amb, m1._cfg(projeto="B"), excel=False)
+    ultimos = sv.ultimos_calculos_por_projeto(amb)
+    assert sorted(ultimos["projeto"]) == ["A", "B"]
+    # a linha de A deve ser a do cálculo mais recente (spread 2%), não o primeiro (spread 1%)
+    linha_a = ultimos.set_index("projeto").loc["A"]
+    assert linha_a["arquivo"] == ultimo_a.registro.name
+
+
+def test_meta_serie_rapida(amb):
+    meta = sv.meta_serie(amb, "fred_gs10")
+    assert meta["linhas"] > 0 and "sha256_csv" in meta
+    assert sv.meta_serie(amb, "damodaran_beta_global", "2026")["linhas"] == 2
+
+
+def test_indicadores_painel_bases_sinteticas(amb):
+    indicadores = sv.indicadores_painel(amb, meses=24)
+    nomes = [i["nome"] for i in indicadores]
+    assert "Treasury 10 anos" in nomes and "CDS Brasil 10 anos" in nomes and "TLP" in nomes
+    assert all(i["status"] == "ok" for i in indicadores), [i["nome"] for i in indicadores if i["status"] != "ok"]
+    treasury = next(i for i in indicadores if i["nome"] == "Treasury 10 anos")
+    assert treasury["ultimo_valor"] == pytest.approx(4.0)
+    assert treasury["tipo_variacao"] == "pb"
+    assert list(treasury["serie"].columns) == ["data", "valor"]
+    assert len(treasury["serie"]) <= 25  # ~24 meses + o mês corrente
+
+
+def test_indicadores_painel_sem_dados_nao_quebra(amb, repo):
+    """Removendo uma série da base, o indicador correspondente vem sem dados, sem quebrar o painel."""
+    (amb.bases / "tratado" / "bcb_tlp.csv").unlink()
+    (amb.bases / "tratado" / "bcb_tlp.meta.json").unlink()
+    indicadores = sv.indicadores_painel(amb, meses=24)
+    tlp = next(i for i in indicadores if i["nome"] == "TLP")
+    assert tlp["status"] == "sem_dados"
+    assert all(i["status"] == "ok" for i in indicadores if i["nome"] != "TLP")

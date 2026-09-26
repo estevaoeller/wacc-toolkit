@@ -15,6 +15,8 @@ amb = obter_ambiente()
 if amb is None:
     st.stop()
 
+linhas_bndes = sv.linhas_bndes(amb)  # id -> descrição legível; usado aqui e em _carregar()
+
 FASES_PADRAO = [{"setor": "", "peso": 100.0, "fase": "", "base_peso": ""}]
 
 if "nw_fases" not in st.session_state:
@@ -52,7 +54,7 @@ def _carregar(cfg: sv.ConfigProjeto) -> None:
     st.session_state.nw_notas = cfg.notas
     st.session_state.nw_regiao = cfg.regiao
     st.session_state.nw_linha_bndes = cfg.linha_bndes
-    st.session_state.nw_linha_bndes_sel = cfg.linha_bndes
+    st.session_state.nw_linha_bndes_sel = linhas_bndes.get(cfg.linha_bndes, cfg.linha_bndes)
     st.session_state.nw_spread = cfg.spread_credito * 100
     st.session_state.nw_spread_descricao = cfg.spread_descricao
     st.session_state.nw_spread_fonte = cfg.spread_fonte
@@ -120,15 +122,13 @@ pesos_ok = abs(soma_pesos - 100.0) < 1e-6
 
 # ------------------------------------------------------------------ dívida (BNDES)
 st.subheader("Dívida")
-linhas = sv.linhas_bndes(amb)
 c1, c2 = st.columns(2)
-if linhas:
-    ids = list(linhas)
-    linha_bndes = c1.selectbox(
-        "Linha BNDES", ids,
-        index=ids.index(st.session_state.nw_linha_bndes) if st.session_state.nw_linha_bndes in ids else 0,
-        format_func=lambda i: linhas[i], key="nw_linha_bndes_sel",
-    )
+if linhas_bndes:
+    # o valor do widget é o rótulo legível (não o id): mais simples e mais robusto a reruns
+    # do que um format_func sobre o id, e a tela nunca mostra o id técnico.
+    id_por_rotulo = {rotulo: id_ for id_, rotulo in linhas_bndes.items()}
+    rotulo_escolhido = c1.selectbox("Linha BNDES", list(linhas_bndes.values()), key="nw_linha_bndes_sel")
+    linha_bndes = id_por_rotulo[rotulo_escolhido]
 else:
     c1.info("Nenhuma linha BNDES cadastrada em parâmetros manuais.")
     linha_bndes = st.session_state.nw_linha_bndes or ""
@@ -168,7 +168,11 @@ except ValueError as e:
 
 # ------------------------------------------------------------------ ações
 st.subheader("Ações")
-c1, c2 = st.columns(2)
+previa_atual = st.session_state.get("nw_previa")
+previa_cfg = st.session_state.get("nw_previa_cfg")
+previa_atualizada = previa_atual is not None and cfg is not None and previa_cfg == cfg
+
+c1, c2, c3 = st.columns(3)
 with c1:
     nome_arquivo = st.text_input("Nome do arquivo", value=(projeto or "projeto"), key="nw_nome_arquivo")
     sobrescrever = st.checkbox("Sobrescrever se já existir", key="nw_sobrescrever")
@@ -182,34 +186,52 @@ with c1:
 
 with c2:
     calcular_desabilitado = cfg is None or not pesos_ok
-    if st.button("Calcular", disabled=calcular_desabilitado, type="primary", key="nw_botao_calcular"):
+    if st.button("Calcular", disabled=calcular_desabilitado, key="nw_botao_calcular",
+                help="Calcula uma prévia do WACC, sem gravar nada em Calculos/."):
         try:
-            calculo = sv.calcular_projeto(amb, cfg, excel=True)
+            resultado_previa = sv.calcular_previa(amb, cfg)
         except (ValueError, KeyError, FileNotFoundError) as e:
             st.error(f"{e}\n\nSe a mensagem indicar uma base desatualizada ou ausente, "
                      f"vá à página Bases e atualize ou importe a fonte correspondente.")
-            st.session_state.pop("nw_resultado", None)
         else:
-            st.session_state.nw_resultado = calculo
+            st.session_state.nw_previa = resultado_previa
+            st.session_state.nw_previa_cfg = cfg
+            previa_atual, previa_cfg, previa_atualizada = resultado_previa, cfg, True
 
-# ------------------------------------------------------------------ resultado
-calculo = st.session_state.get("nw_resultado")
-if calculo is not None:
-    resultado = calculo.resultado
-    st.subheader("Resultado")
+with c3:
+    gerar_desabilitado = not previa_atualizada
+    if st.button("Gerar versão", disabled=gerar_desabilitado, type="primary", key="nw_botao_gerar",
+                help="Grava o registro (JSON) e o Excel em Calculos/, a partir da prévia atual."):
+        try:
+            calculo = sv.calcular_projeto(amb, cfg, excel=True)
+        except (ValueError, KeyError, FileNotFoundError) as e:
+            st.error(str(e))
+        else:
+            st.session_state.nw_gerado = calculo
+
+# ------------------------------------------------------------------ resultado (prévia)
+if previa_atual is not None:
+    st.subheader("Resultado (prévia)")
+    if not previa_atualizada:
+        st.warning("A prévia está desatualizada: recalcule (\"Calcular\") antes de gerar a versão.")
+
     m1, m2 = st.columns(2)
-    m1.metric("WACC real", formatar_valor("wacc_real", resultado["wacc_real"]))
-    m2.metric("WACC nominal", formatar_valor("wacc_nominal", resultado["wacc_nominal"]))
+    m1.metric("WACC real", formatar_valor("wacc_real", previa_atual["wacc_real"]))
+    m2.metric("WACC nominal", formatar_valor("wacc_nominal", previa_atual["wacc_nominal"]))
 
-    tabela = sv.tabela_custo_de_capital(resultado)
+    tabela = sv.tabela_custo_de_capital(previa_atual)
     for secao in ("KE", "KD", "WACC"):
         st.markdown(f"**{secao}**")
         linhas = tabela.loc[tabela["secao"] == secao, ["item", "valor", "descricao"]]
         st.dataframe(linhas.rename(columns={"item": "Item", "valor": "Valor", "descricao": "Descrição"}),
                     width="stretch", hide_index=True)
 
-    st.caption(f"Registro: {calculo.registro}")
-    if calculo.excel:
-        st.caption(f"Excel: {calculo.excel}")
-        st.download_button("Baixar Excel", data=calculo.excel.read_bytes(), file_name=calculo.excel.name,
+# ------------------------------------------------------------------ versão gerada
+gerado = st.session_state.get("nw_gerado")
+if gerado is not None:
+    st.subheader("Versão gerada")
+    st.success(f"Registro: {gerado.registro}")
+    if gerado.excel:
+        st.caption(f"Excel: {gerado.excel}")
+        st.download_button("Baixar Excel", data=gerado.excel.read_bytes(), file_name=gerado.excel.name,
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

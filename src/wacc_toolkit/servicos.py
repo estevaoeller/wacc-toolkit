@@ -157,6 +157,12 @@ def versoes(amb: Ambiente, serie: str) -> list[str]:
     return amb.repo.versoes(_spec(serie))
 
 
+def meta_serie(amb: Ambiente, serie: str, versao: str | None = None) -> dict:
+    """Só os metadados (rápido: não lê o CSV da série), úteis como chave de cache - ex.:
+    ``(serie, versao, meta["sha256_csv"])`` identifica de forma estável um conteúdo já lido."""
+    return amb.repo.meta_serie(_spec(serie), versao) or {}
+
+
 def setores_damodaran(amb: Ambiente, regiao: str, data_base: date) -> list[str]:
     serie = "damodaran_beta_global" if regiao == "global" else "damodaran_beta_emerg"
     b = Bases(amb.repo)
@@ -242,6 +248,13 @@ class Calculo:
     resultado: ResultadoWACC
     registro: Path
     excel: Path | None
+
+
+def calcular_previa(amb: Ambiente, cfg: ConfigProjeto) -> ResultadoWACC:
+    """Só calcula (``calc.modo1.calcular``), sem gravar registro nem Excel: para prévias que o
+    usuário recalcula à vontade antes de decidir gerar a versão definitiva. O valor é idêntico
+    ao que :func:`calcular_projeto` produziria para a mesma configuração e as mesmas bases."""
+    return calcular(cfg, Bases(amb.repo))
 
 
 def calcular_projeto(amb: Ambiente, cfg: ConfigProjeto, excel: bool = True) -> Calculo:
@@ -330,6 +343,14 @@ def listar_calculos(amb: Ambiente) -> pd.DataFrame:
     return pd.DataFrame(linhas)
 
 
+def ultimos_calculos_por_projeto(amb: Ambiente) -> pd.DataFrame:
+    """Uma linha por projeto: o cálculo mais recente (maior ``gerado_em``)."""
+    lista = listar_calculos(amb)
+    if lista.empty:
+        return lista
+    return lista.sort_values("gerado_em").groupby("projeto", as_index=False).last()
+
+
 def ler_calculo(amb: Ambiente, arquivo: str) -> dict:
     return json.loads((amb.calculos / Path(arquivo).name).read_text(encoding="utf-8"))
 
@@ -350,3 +371,91 @@ def comparar_calculos(amb: Ambiente, arquivo_a: str, arquivo_b: str) -> pd.DataF
 def copiar_excel(amb: Ambiente, arquivo_json: str, destino: str | Path) -> Path:
     origem = (amb.calculos / Path(arquivo_json).name).with_suffix(".xlsx")
     return Path(shutil.copy2(origem, destino))
+
+
+# ------------------------------------------------------------------ painel de indicadores
+def _serie_coluna(amb: Ambiente, serie: str, coluna: str) -> pd.DataFrame:
+    df, _ = ler_serie(amb, serie)
+    return df[["data", coluna]].rename(columns={coluna: "valor"})
+
+
+def _serie_inflacao_us(amb: Ambiente) -> pd.DataFrame:
+    dn, _ = ler_serie(amb, "fred_gs10")
+    dr, _ = ler_serie(amb, "fred_fii10")
+    m = dn.rename(columns={"valor": "nominal"})[["data", "nominal"]].merge(
+        dr.rename(columns={"valor": "real"})[["data", "real"]], on="data", how="inner")
+    m["valor"] = ((1 + m["nominal"] / 100) / (1 + m["real"] / 100) - 1) * 100
+    return m[["data", "valor"]]
+
+
+def _serie_ntnb(amb: Ambiente, vencimento: str = "2035-05-15") -> pd.DataFrame:
+    from .calc.modo1 import NTNB_TITULO
+
+    df, _ = ler_serie(amb, "tesouro_td_taxas")
+    d = df[(df["titulo"] == NTNB_TITULO) & (df["vencimento"].astype(str) == vencimento)]
+    return d[["data", "taxa_compra"]].rename(columns={"taxa_compra": "valor"})
+
+
+def _serie_ipca_focus(amb: Ambiente, ano: int) -> pd.DataFrame:
+    df, _ = ler_serie(amb, "bcb_focus_ipca_anual")
+    d = df[(df["base_calculo"] == 0) & (df["ano_referencia"] == ano)]
+    return d[["data", "mediana"]].rename(columns={"mediana": "valor"})
+
+
+def _indicador(nome: str, unidade: str, fonte: str, tipo_variacao: str, fator_pb: float, meses: int, obter) -> dict:
+    """``tipo_variacao``: "pb" (a variação de 12 meses é dada em pontos-base, valor já em
+    pontos percentuais × ``fator_pb``) ou "pct" (variação percentual, para índices)."""
+    item: dict = {
+        "nome": nome, "unidade": unidade, "fonte": fonte, "tipo_variacao": tipo_variacao, "status": "ok",
+        "ultimo_valor": None, "data_ultimo": None, "valor_12m_atras": None, "variacao": None,
+        "serie": pd.DataFrame(columns=["data", "valor"]),
+    }
+    try:
+        df = obter()
+    except (FileNotFoundError, KeyError, ValueError):
+        item["status"] = "sem_dados"
+        return item
+    df = df.dropna(subset=["valor"])
+    if df.empty:
+        item["status"] = "sem_dados"
+        return item
+    df = df.assign(_data=pd.to_datetime(df["data"])).sort_values("_data")
+    data_ultimo = df["_data"].iloc[-1]
+    ultimo_valor = float(df["valor"].iloc[-1])
+    limite_12m = data_ultimo - pd.DateOffset(months=12)
+    anteriores = df[df["_data"] <= limite_12m]
+    valor_12m = float(anteriores["valor"].iloc[-1]) if not anteriores.empty else None
+    variacao = None
+    if valor_12m is not None:
+        variacao = (ultimo_valor - valor_12m) * fator_pb if tipo_variacao == "pb" else \
+            ((ultimo_valor / valor_12m - 1) * 100 if valor_12m else None)
+    limite_serie = data_ultimo - pd.DateOffset(months=meses)
+    serie = df[df["_data"] >= limite_serie][["data", "valor"]].reset_index(drop=True)
+    item.update(ultimo_valor=ultimo_valor, data_ultimo=str(pd.Timestamp(data_ultimo).date()),
+               valor_12m_atras=valor_12m, variacao=variacao, serie=serie)
+    return item
+
+
+def indicadores_painel(amb: Ambiente, meses: int = 24) -> list[dict]:
+    """As variáveis mais relevantes para acompanhamento, cada uma com o último valor, o valor de
+    12 meses atrás, a variação (pontos-base para taxas, percentual para índices) e a série dos
+    últimos ``meses`` meses. Uma série ausente não interrompe o painel: o indicador correspondente
+    vem com ``status="sem_dados"``."""
+    ano_atual = date.today().year
+    especificacoes = [
+        ("Treasury 10 anos", "% a.a.", "FRED (GS10)", "pb", 100.0, lambda: _serie_coluna(amb, "fred_gs10", "valor")),
+        ("Inflação implícita EUA", "% a.a.", "FRED (GS10 e FII10)", "pb", 100.0, lambda: _serie_inflacao_us(amb)),
+        ("CDS Brasil 10 anos", "p.b.", "Investing.com", "pb", 1.0,
+         lambda: _serie_coluna(amb, "investing_cds10_brasil_mensal", "ultimo")),
+        ("Ibovespa", "pontos", "B3", "pct", 0.0, lambda: _serie_coluna(amb, "b3_ibov", "fechamento")),
+        ("S&P 500 Total Return", "pontos", "Yahoo Finance", "pct", 0.0,
+         lambda: _serie_coluna(amb, "yahoo_sp500tr", "fechamento")),
+        ("NTN-B 2035", "% a.a.", "Tesouro Transparente", "pb", 100.0, lambda: _serie_ntnb(amb)),
+        ("TLP", "% a.a.", "BCB (SGS 27572)", "pb", 100.0, lambda: _serie_coluna(amb, "bcb_tlp", "valor")),
+        (f"IPCA Focus {ano_atual}", "% a.a.", "BCB (Focus)", "pb", 100.0,
+         lambda: _serie_ipca_focus(amb, ano_atual)),
+        (f"IPCA Focus {ano_atual + 1}", "% a.a.", "BCB (Focus)", "pb", 100.0,
+         lambda: _serie_ipca_focus(amb, ano_atual + 1)),
+    ]
+    return [_indicador(nome, unidade, fonte, tipo, fator, meses, obter)
+            for nome, unidade, fonte, tipo, fator, obter in especificacoes]
