@@ -43,6 +43,7 @@ from .rotulos import ROTULOS as _ROTULOS
 from .rotulos import anos_abrev as _anos_abrev
 from .rotulos import desc_param as _desc_param
 from .rotulos import descricoes as _descricoes
+from .rotulos import eh_variavel_planilha as _eh_variavel_planilha
 from .rotulos import extrair_versao as _extrair_versao
 from .rotulos import meses_txt as _meses_txt
 
@@ -215,6 +216,23 @@ def _sheet_basico(wb: Workbook, usados: set[str], nome: str, rec) -> tuple:
     return ws, col_idx, r0, r1
 
 
+def _generico(wb: Workbook, usados: set[str], comp) -> tuple[float, list[str]]:
+    """Variável fora do catálogo que reproduz a planilha (ver ``rotulos.VARS_PLANILHA``): o valor
+    entra como número (não fórmula) e cada recorte do componente vira uma aba genérica, no
+    mesmo formato de ``_sheet_basico`` (metadados + tabela). Nunca falha, mesmo sem recortes."""
+    abas = []
+    for rec in comp.recortes:
+        ws, *_ = _sheet_basico(wb, usados, rec.nome, rec)
+        abas.append(ws.title)
+    return comp.valor, abas
+
+
+def _comentario_generico(comp, abas: list[str]) -> str:
+    vid = comp.detalhes.get("variavel", comp.id)
+    onde = ", ".join(abas) if abas else "(sem recorte)"
+    return f"valor calculado pelo motor (variável {vid}); observações na aba {onde}"
+
+
 # ------------------------------------------------------------------ ordem/layout da aba Custo de Capital
 _FMT_VALOR = {
     "beta_u": "0.00", "d_v": "0.0%", "t": "0.0%", "beta_l": "0.000",
@@ -232,20 +250,29 @@ def _layout_principal() -> dict[str, int]:
     return row_of
 
 
-def _layout_ponderacao(n_fases: int, linha0: int) -> dict:
+def _layout_ponderacao(n_fases: int, linha0: int, incluir_dv: bool = True) -> dict:
+    """``incluir_dv=False``: D/(D+E) não vem do catálogo Damodaran (variável desconhecida para o
+    grupo ``d_v``) - o bloco só pondera o beta por fase (sem linhas de D/(D+E) nem "Média Setores"
+    de D/(D+E); ``d_v`` some pelo caminho genérico, fora deste bloco)."""
     beta_r, dv_r, peso_r = [], [], []
     r = linha0
+    passo = 3 if incluir_dv else 2
     for _ in range(n_fases):
         beta_r.append(r)
-        dv_r.append(r + 1)
-        peso_r.append(r + 2)
-        r += 3
+        if incluir_dv:
+            dv_r.append(r + 1)
+            peso_r.append(r + 2)
+        else:
+            peso_r.append(r + 1)
+        r += passo
     row_soma = r if n_fases > 2 else None
     if row_soma:
         r += 1
-    row_media_beta, row_media_dv = r, r + 1
+    row_media_beta = r
+    row_media_dv = r + 1 if incluir_dv else None
     return {"beta": beta_r, "dv": dv_r, "peso": peso_r, "soma": row_soma,
-            "media_beta": row_media_beta, "media_dv": row_media_dv, "fim": row_media_dv}
+            "media_beta": row_media_beta, "media_dv": row_media_dv,
+            "fim": row_media_dv if incluir_dv else row_media_beta}
 
 
 # ------------------------------------------------------------------ exportação
@@ -266,7 +293,8 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     cc = wb.create_sheet("Custo de Capital")
     row_of = _layout_principal()
     linha_pond0 = 42
-    pond = _layout_ponderacao(n_fases, linha_pond0) if n_fases > 1 else None
+    d_v_conhecida = _eh_variavel_planilha("d_v", c["d_v"].detalhes.get("variavel"))
+    pond = _layout_ponderacao(n_fases, linha_pond0, d_v_conhecida) if n_fases > 1 else None
 
     cc.cell(row=1, column=CI, value=_sanitizar(f"Custo de Capital - {cfg.projeto}")).font = TITULO
     for j, t in enumerate(("Item", "Valor", "Descrição"), start=CI):
@@ -290,7 +318,8 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     _secao(4, "KE")
     _secao(18, "KD")
 
-    def _linha(cid, formula_ou_valor, descricao, *, editable=False, italico=False, total=False, wacc=False):
+    def _linha(cid, formula_ou_valor, descricao, *, editable=False, italico=False, total=False, wacc=False,
+               comentario=None):
         r = row_of[cid]
         item = cc.cell(row=r, column=CI, value=_sanitizar(_ROTULOS[cid]))
         item.border = BORDA
@@ -307,6 +336,8 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         if editable:
             val.fill = FUNDO_ENTRADA
             val.comment = Comment("entrada", "wacc-toolkit")
+        elif comentario:
+            val.comment = Comment(_sanitizar(comentario), "wacc-toolkit")
         if italico:
             item.font = ITALICO
             val.font = ITALICO
@@ -335,9 +366,12 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         aba = wb.sheetnames[-1]
         return f"=AVERAGE('{aba}'!{col}{r0}:{col}{r1})/100"
 
-    f_rf = _serie_media("rf")
-    desc_rf = desc["rf"]
-    _linha("rf", f_rf, desc_rf)
+    if _eh_variavel_planilha("rf", c["rf"].detalhes.get("variavel")):
+        f_rf = _serie_media("rf")
+        _linha("rf", f_rf, desc["rf"])
+    else:
+        v_rf, abas_rf = _generico(wb, abas_usadas, c["rf"])
+        _linha("rf", v_rf, c["rf"].rotulo, comentario=_comentario_generico(c["rf"], abas_rf))
 
     # ---- Rm
     def _rm_formula() -> str:
@@ -388,14 +422,23 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
             return f"=AVERAGE('{aba}'!C{r_ini}:C{r_fim})", aba
         return f"=(1+AVERAGE('{aba}'!C{r_ini}:C{r_fim}))^12-1", aba
 
-    f_rm, _ = _rm_formula()
-    desc_rm = desc["rm"]
-    _linha("rm", f_rm, desc_rm)
+    if _eh_variavel_planilha("rm", c["rm"].detalhes.get("variavel")):
+        f_rm, _ = _rm_formula()
+        desc_rm = desc["rm"]
+        _linha("rm", f_rm, desc_rm)
+    else:
+        v_rm, abas_rm = _generico(wb, abas_usadas, c["rm"])
+        desc_rm = c["rm"].rotulo
+        _linha("rm", v_rm, desc_rm, comentario=_comentario_generico(c["rm"], abas_rm))
 
     # ---- Rf estrutural
-    f_rfe = _serie_media("rf_estrutural")
-    desc_rfe = desc["rf_estrutural"]
-    _linha("rf_estrutural", f_rfe, desc_rfe)
+    if _eh_variavel_planilha("rf_estrutural", c["rf_estrutural"].detalhes.get("variavel")):
+        f_rfe = _serie_media("rf_estrutural")
+        _linha("rf_estrutural", f_rfe, desc["rf_estrutural"])
+    else:
+        v_rfe, abas_rfe = _generico(wb, abas_usadas, c["rf_estrutural"])
+        _linha("rf_estrutural", v_rfe, c["rf_estrutural"].rotulo,
+               comentario=_comentario_generico(c["rf_estrutural"], abas_rfe))
 
     # ---- ERP
     _linha("erp", f"={_ref('rm')}-{_ref('rf_estrutural')}", "")
@@ -445,52 +488,67 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
                 f"*_xlfn.STDEV.S('{aba_ibov}'!{col_ret_ibov}{ri0}:{col_ret_ibov}{ri1})"
                 f"/_xlfn.STDEV.S('{aba_ntnb}'!{col_ret_ntnb}{rn0}:{col_ret_ntnb}{rn1})/10000")
 
-    f_rb = _risco_brasil_formula()
-    desc_rb = desc["risco_brasil"]
-    _linha("risco_brasil", f_rb, desc_rb)
+    if _eh_variavel_planilha("risco_brasil", c["risco_brasil"].detalhes.get("variavel")):
+        f_rb = _risco_brasil_formula()
+        desc_rb = desc["risco_brasil"]
+        _linha("risco_brasil", f_rb, desc_rb)
+    else:
+        v_rb, abas_rb = _generico(wb, abas_usadas, c["risco_brasil"])
+        desc_rb = c["risco_brasil"].rotulo
+        _linha("risco_brasil", v_rb, desc_rb, comentario=_comentario_generico(c["risco_brasil"], abas_rb))
 
-    # ---- beta_u / d_v (recortes sempre; fórmula depende de haver bloco de ponderação)
+    # ---- beta_u (nunca vem do catálogo de variáveis: sempre a mesma conta, recorte sempre)
     rec_beta = c["beta_u"].recortes[0]
     _, cib, r0b, r1b = _sheet_basico(wb, abas_usadas, rec_beta.nome, rec_beta)
     col_beta = _col_letra(cib, op.beta_coluna)
     aba_beta = wb.sheetnames[-1]
-
-    rec_de = c["d_v"].recortes[0]
-    ws_de = wb.create_sheet(_nome_aba(rec_de.nome, abas_usadas))
-    row = _meta_recorte(ws_de, rec_de, 1)
-    col_idx_de, r0d, r1d = _tabela(ws_de, rec_de.df, row)
-    col_de = _col_letra(col_idx_de, op.de_coluna)
-    col_dv_idx = len(col_idx_de) + 1
-    col_dv = get_column_letter(col_dv_idx)
-    cel_dv = _cab(ws_de, row, col_dv_idx, "D/V")
-    cel_dv.alignment = CENTRO
-    ws_de.column_dimensions[col_dv].width = LARGURA_R
-    for i in range(len(rec_de.df)):
-        r = r0d + i
-        cel = ws_de.cell(row=r, column=col_dv_idx, value=f"={col_de}{r}/(1+{col_de}{r})")
-        cel.number_format = FMT_NUM
-        cel.border = BORDA
-        cel.alignment = CENTRO
-    aba_de = ws_de.title
-
     vb = _extrair_versao(c["beta_u"].rotulo)
-    vd = _extrair_versao(c["d_v"].rotulo)
     desc_beta_dv = desc["beta_u"]
+
+    # ---- D/(D+E): fórmula "clássica" (Damodaran, ponderada por fase) só se a variável for a da
+    # planilha; qualquer outra usa o caminho genérico (valor + recortes tal como vierem).
+    aba_de = col_de = col_dv = r0d = vd = None
+    if d_v_conhecida:
+        rec_de = c["d_v"].recortes[0]
+        ws_de = wb.create_sheet(_nome_aba(rec_de.nome, abas_usadas))
+        row = _meta_recorte(ws_de, rec_de, 1)
+        col_idx_de, r0d, r1d = _tabela(ws_de, rec_de.df, row)
+        col_de = _col_letra(col_idx_de, op.de_coluna)
+        col_dv_idx = len(col_idx_de) + 1
+        col_dv = get_column_letter(col_dv_idx)
+        cel_dv = _cab(ws_de, row, col_dv_idx, "D/V")
+        cel_dv.alignment = CENTRO
+        ws_de.column_dimensions[col_dv].width = LARGURA_R
+        for i in range(len(rec_de.df)):
+            r = r0d + i
+            cel = ws_de.cell(row=r, column=col_dv_idx, value=f"={col_de}{r}/(1+{col_de}{r})")
+            cel.number_format = FMT_NUM
+            cel.border = BORDA
+            cel.alignment = CENTRO
+        aba_de = ws_de.title
+        vd = _extrair_versao(c["d_v"].rotulo)
 
     if pond:
         _def_nome(wb, "peso_1", f"'Custo de Capital'!${VL}${pond['peso'][0]}")
         for i in range(2, n_fases + 1):
             _def_nome(wb, f"peso_{i}", f"'Custo de Capital'!${VL}${pond['peso'][i-1]}")
         f_beta_u = f"={VL}{pond['media_beta']}"
-        f_dv = f"={VL}{pond['media_dv']}"
+        f_dv = f"={VL}{pond['media_dv']}" if d_v_conhecida else None
     else:
-        ws_de["Z1"] = 1.0  # fase única: peso fixo (100%), sem bloco de ponderação visível
-        _def_nome(wb, "peso_1", f"'{aba_de}'!$Z$1")
+        # fase única: peso fixo (100%), sem bloco de ponderação visível; o placeholder do nome
+        # definido "peso_1" mora na aba do beta (que sempre existe, ao contrário da de D/V).
+        aba_beta_ws = wb[aba_beta]
+        aba_beta_ws["Z1"] = 1.0
+        _def_nome(wb, "peso_1", f"'{aba_beta}'!$Z$1")
         f_beta_u = f"='{aba_beta}'!{col_beta}{r0b}"
-        f_dv = f"='{aba_de}'!{col_dv}{r0d}"
+        f_dv = f"='{aba_de}'!{col_dv}{r0d}" if d_v_conhecida else None
 
     _linha("beta_u", f_beta_u, desc_beta_dv)
-    _linha("d_v", f_dv, desc_beta_dv)
+    if d_v_conhecida:
+        _linha("d_v", f_dv, desc_beta_dv)
+    else:
+        v_dv, abas_dv = _generico(wb, abas_usadas, c["d_v"])
+        _linha("d_v", v_dv, c["d_v"].rotulo, comentario=_comentario_generico(c["d_v"], abas_dv))
 
     # ---- T (entrada editável)
     rec_t = c["t"].recortes[0]
@@ -535,17 +593,27 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         aba_tips = ws_tips.title
         return f"=AVERAGE('{aba_tips}'!{col_imp}{r0r}:{col_imp}{r1r})"
 
-    f_inf = _inflacao_formula()
-    desc_inf = desc["inflacao_us"]
-    _linha("inflacao_us", f_inf, desc_inf)
+    if _eh_variavel_planilha("inflacao_us", c["inflacao_us"].detalhes.get("variavel")):
+        f_inf = _inflacao_formula()
+        desc_inf = desc["inflacao_us"]
+        _linha("inflacao_us", f_inf, desc_inf)
+    else:
+        v_inf, abas_inf = _generico(wb, abas_usadas, c["inflacao_us"])
+        desc_inf = c["inflacao_us"].rotulo
+        _linha("inflacao_us", v_inf, desc_inf, comentario=_comentario_generico(c["inflacao_us"], abas_inf))
 
     # ---- Ke real (total)
     _linha("ke_real", f"=(1+{_ref('ke_nominal')})/(1+{_ref('inflacao_us')})-1", "", total=True)
 
     # ---- TLP
-    f_tlp = _serie_media("tlp")
-    desc_tlp = desc["tlp"]
-    _linha("tlp", f_tlp, desc_tlp)
+    if _eh_variavel_planilha("tlp", c["tlp"].detalhes.get("variavel")):
+        f_tlp = _serie_media("tlp")
+        desc_tlp = desc["tlp"]
+        _linha("tlp", f_tlp, desc_tlp)
+    else:
+        v_tlp, abas_tlp = _generico(wb, abas_usadas, c["tlp"])
+        desc_tlp = c["tlp"].rotulo
+        _linha("tlp", v_tlp, desc_tlp, comentario=_comentario_generico(c["tlp"], abas_tlp))
 
     # ---- Remuneração BNDES (entrada editável)
     rec_r = c["remuneracao_bndes"].recortes[0]
@@ -595,8 +663,12 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         aba = ws.title
         return f"=AVERAGE('{aba}'!B{r0}:B{r1})/100", aba, r0, r1
 
-    f_ipca, aba_focus, r0_ipca, r1_ipca = _ipca_formula()
-    _linha("ipca", f_ipca, f"Projeção Focus - {op.ipca_anos} anos")
+    if _eh_variavel_planilha("ipca", c["ipca"].detalhes.get("variavel")):
+        f_ipca, aba_focus, r0_ipca, r1_ipca = _ipca_formula()
+        _linha("ipca", f_ipca, f"Projeção Focus - {op.ipca_anos} anos")
+    else:
+        v_ipca, abas_ipca = _generico(wb, abas_usadas, c["ipca"])
+        _linha("ipca", v_ipca, c["ipca"].rotulo, comentario=_comentario_generico(c["ipca"], abas_ipca))
 
     # ---- Kd nominal
     _linha("kd_nominal", f"=(1+{_ref('tlp')})*(1+remuneracao+spread)*(1+{_ref('ipca')})-1", "", italico=True)
@@ -612,21 +684,46 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
 
     # ============================================================ Fonte (notas 1-10)
     cc.cell(row=29, column=CI, value="Fonte:").font = NEGRITO
+
+    def _nota_generica(numero: int, grupo: str) -> str:
+        """Texto de reserva para variáveis fora do catálogo que reproduz a planilha: usa
+        ``detalhes['fonte']`` e a descrição legível das janelas escolhidas. Nunca falha."""
+        det = c[grupo].detalhes
+        fonte = det.get("fonte") or ""
+        nome_var = det.get("variavel_nome") or det.get("variavel") or grupo
+        partes_j = "; ".join((det.get("janelas_descricao") or {}).values())
+        txt = f"({numero}) {fonte} - {nome_var}" if fonte else f"({numero}) {nome_var}"
+        return txt + (f" ({partes_j})." if partes_j else ".")
+
+    def _nota(numero: int, grupo: str, texto_fixo):
+        """``texto_fixo``: callable preguiçoso com o texto de hoje (só chamado quando a variável do
+        grupo é a que reproduz a planilha - senão os campos que ele lê podem nem existir)."""
+        if _eh_variavel_planilha(grupo, c[grupo].detalhes.get("variavel")):
+            return texto_fixo()
+        return _nota_generica(numero, grupo)
+
     notas = []
-    notas.append(f"(1) Federal Reserve (FRED GS10) - T-10 {_meses_txt(op.rf_janela)} ({c['rf'].janela['rotulo']}).")
-    notas.append(f"(2) S&P 500 Total Return, Yahoo Finance - {desc_rm}.")
-    notas.append(f"(3) Federal Reserve (FRED GS10) - T-10 {_meses_txt(op.rf_estrutural_janela)} "
-                 f"({c['rf_estrutural'].janela['rotulo']}).")
-    jv = c["risco_brasil"].janela
-    notas.append("(4) Investing.com (CDS Brasil 10 anos) / B3 (Ibovespa) / Tesouro Nacional "
-                 f"(Tesouro IPCA+ com Juros Semestrais {op.ntnb_vencimento[:4]}) - "
-                 f"CDS {jv['cds']['rotulo']}; volatilidade {jv['volatilidade']['rotulo']}.")
-    notas.append(None)  # nota (5): fórmula, tratada abaixo
-    notas.append(f"(6) Federal Reserve (FRED GS10 e FII10) - Inflação implícita, a partir da rentabilidade "
-                 f"da Treasury nominal de 10 anos e da Treasury real de 10 anos (TIPS); "
-                 f"Implícita {_meses_txt(op.inflacao_us_janela)} ({c['inflacao_us'].janela['rotulo']}).")
-    notas.append(f"(7) BCB, SGS 27572 (TLP divulgada pelo BNDES) - TLP {op.tlp_janela} "
-                 f"({c['tlp'].janela['rotulo']}).")
+    notas.append(_nota(1, "rf", lambda: f"(1) Federal Reserve (FRED GS10) - T-10 {_meses_txt(op.rf_janela)} "
+                                        f"({c['rf'].janela['rotulo']})."))
+    notas.append(_nota(2, "rm", lambda: f"(2) S&P 500 Total Return, Yahoo Finance - {desc_rm}."))
+    notas.append(_nota(3, "rf_estrutural",
+                       lambda: f"(3) Federal Reserve (FRED GS10) - T-10 {_meses_txt(op.rf_estrutural_janela)} "
+                               f"({c['rf_estrutural'].janela['rotulo']})."))
+
+    def _nota4():
+        jv = c["risco_brasil"].janela
+        return ("(4) Investing.com (CDS Brasil 10 anos) / B3 (Ibovespa) / Tesouro Nacional "
+                f"(Tesouro IPCA+ com Juros Semestrais {op.ntnb_vencimento[:4]}) - "
+                f"CDS {jv['cds']['rotulo']}; volatilidade {jv['volatilidade']['rotulo']}.")
+
+    notas.append(_nota(4, "risco_brasil", _nota4))
+    notas.append(None)  # nota (5): fórmula, tratada abaixo (beta_u nunca vem do catálogo)
+    notas.append(_nota(6, "inflacao_us",
+                       lambda: "(6) Federal Reserve (FRED GS10 e FII10) - Inflação implícita, a partir da "
+                               "rentabilidade da Treasury nominal de 10 anos e da Treasury real de 10 anos (TIPS); "
+                               f"Implícita {_meses_txt(op.inflacao_us_janela)} ({c['inflacao_us'].janela['rotulo']})."))
+    notas.append(_nota(7, "tlp", lambda: f"(7) BCB, SGS 27572 (TLP divulgada pelo BNDES) - TLP {op.tlp_janela} "
+                                        f"({c['tlp'].janela['rotulo']})."))
     verificado = c["remuneracao_bndes"].detalhes.get("verificado_em", "")
     try:
         verificado = pd.Timestamp(verificado).strftime("%d/%m/%Y")
@@ -639,7 +736,8 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
         rel_fmt = pd.Timestamp(rel).strftime("%d/%m/%Y")
     except (ValueError, TypeError):
         rel_fmt = str(rel)
-    notas.append(f"(10) BCB - Pesquisa Focus (relatório de {rel_fmt}), mediana, média de {op.ipca_anos} anos.")
+    notas.append(_nota(10, "ipca", lambda: f"(10) BCB - Pesquisa Focus (relatório de {rel_fmt}), mediana, "
+                                           f"média de {op.ipca_anos} anos."))
 
     # pontuação como na planilha: cada nota termina em ";" e a última em "."
     notas = [None if t is None else t.rstrip(" .;") + (";" if i < len(notas) - 1 else ".")
@@ -662,12 +760,27 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
     def _texto(expr: str) -> tuple:
         return ("ref", expr)
 
+    # D/(D+E) só entra na narrativa quando a variável de d_v é a do Damodaran (senão a nota fala
+    # só do beta - d_v segue seu próprio caminho, genérico, fora desta nota).
+    def _alavancagem(ref_dv: str) -> list:
+        return [" e alavancagem (D/(D+E)) de ", _texto(f'TEXT({ref_dv},"0,00%")')] if d_v_conhecida else []
+
     pecas: list = [f"(5) Damodaran Online (atualizado em jan/{vb}, região {cfg.regiao.title()}): "]
-    if n_fases == 1:
-        f0 = cfg.fases[0]
-        pecas += [f"utilizou-se o setor {cfg.regiao.title()} - {f0.setor}, com um beta desalavancado de ",
-                  _texto(f'TEXT({_ref("beta_u")},"0,000")'), " e alavancagem (D/(D+E)) de ",
-                  _texto(f'TEXT({_ref("d_v")},"0,00%")'), "."]
+    if n_fases == 1 or not d_v_conhecida:
+        f0 = cfg.fases[0] if n_fases == 1 else None
+        if f0 is not None:
+            pecas += [f"utilizou-se o setor {cfg.regiao.title()} - {f0.setor}, com um beta desalavancado de ",
+                      _texto(f'TEXT({_ref("beta_u")},"0,000")')] + _alavancagem(_ref("d_v")) + ["."]
+        else:
+            pecas.append("Uma média de betas desalavancados foi utilizada para refletir as particularidades "
+                          "do projeto.")
+            for j2, f in enumerate(cfg.fases):
+                rb, rp = pond["beta"][j2], pond["peso"][j2]
+                intro = (f" Para a fase de {f.fase}, adotou-se" if j2 == 0
+                         else f" Já para a fase de {f.fase}, utilizou-se")
+                pecas += [f"{intro} o setor {cfg.regiao.title()} - {f.setor}, com um beta desalavancado de ",
+                          _texto(f'TEXT({VL}{rb},"0,000")'),
+                          f", ponderado pela proporção do {f.base_peso} (", _texto(f'TEXT({VL}{rp},"0,00%")'), ")."]
     else:
         pecas.append("Uma média de betas desalavancados foi utilizada para refletir as particularidades "
                       "do projeto.")
@@ -700,9 +813,11 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
 
     # ============================================================ bloco de ponderação
     if pond:
-        cc.cell(row=41, column=CI, value="Ponderação dos betas e do D/(D+E) por fase").font = NEGRITO
+        titulo_pond = ("Ponderação dos betas e do D/(D+E) por fase" if d_v_conhecida
+                       else "Ponderação dos betas por fase")
+        cc.cell(row=41, column=CI, value=titulo_pond).font = NEGRITO
         for j2, f in enumerate(cfg.fases):
-            rb, rd, rp = pond["beta"][j2], pond["dv"][j2], pond["peso"][j2]
+            rb, rp = pond["beta"][j2], pond["peso"][j2]
             cc.cell(row=rb, column=CI, value="Beta desalavancado").border = BORDA
             vb_cel = cc.cell(row=rb, column=CV, value=f"='{aba_beta}'!{col_beta}{r0b + j2}")
             vb_cel.alignment = CENTRO
@@ -710,12 +825,14 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
             vb_cel.border = BORDA
             cc.cell(row=rb, column=CD, value=_sanitizar(f.setor)).border = BORDA
 
-            cc.cell(row=rd, column=CI, value="D/(D+E)").border = BORDA
-            vd_cel = cc.cell(row=rd, column=CV, value=f"='{aba_de}'!{col_dv}{r0d + j2}")
-            vd_cel.alignment = CENTRO
-            vd_cel.number_format = FMT_PCT
-            vd_cel.border = BORDA
-            cc.cell(row=rd, column=CD, value=_sanitizar(f"{cfg.regiao.title()} ({vb})")).border = BORDA
+            if d_v_conhecida:
+                rd = pond["dv"][j2]
+                cc.cell(row=rd, column=CI, value="D/(D+E)").border = BORDA
+                vd_cel = cc.cell(row=rd, column=CV, value=f"='{aba_de}'!{col_dv}{r0d + j2}")
+                vd_cel.alignment = CENTRO
+                vd_cel.number_format = FMT_PCT
+                vd_cel.border = BORDA
+                cc.cell(row=rd, column=CD, value=_sanitizar(f"{cfg.regiao.title()} ({vb})")).border = BORDA
 
             cc.cell(row=rp, column=CI, value="Peso").border = BORDA
             if n_fases == 2 and j2 == 1:
@@ -735,20 +852,22 @@ def exportar_excel(resultado: ResultadoWACC, caminho: str | Path) -> Path:
             soma_cel.number_format = FMT_PCT
 
         prod_beta = "+".join(f"{VL}{b}*{VL}{p}" for b, p in zip(pond["beta"], pond["peso"]))
-        prod_dv = "+".join(f"{VL}{d}*{VL}{p}" for d, p in zip(pond["dv"], pond["peso"]))
-        rmb, rmd = pond["media_beta"], pond["media_dv"]
+        rmb = pond["media_beta"]
         cc.cell(row=rmb, column=CI, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
         c_mb = cc.cell(row=rmb, column=CV, value=f"={prod_beta}")
         c_mb.alignment = CENTRO
         c_mb.number_format = "0.000"
         c_mb.font = NEGRITO
         cc.cell(row=rmb, column=CD, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
-        cc.cell(row=rmd, column=CI, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
-        c_md = cc.cell(row=rmd, column=CV, value=f"={prod_dv}")
-        c_md.alignment = CENTRO
-        c_md.number_format = FMT_PCT
-        c_md.font = NEGRITO
-        cc.cell(row=rmd, column=CD, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
+        if d_v_conhecida:
+            prod_dv = "+".join(f"{VL}{d}*{VL}{p}" for d, p in zip(pond["dv"], pond["peso"]))
+            rmd = pond["media_dv"]
+            cc.cell(row=rmd, column=CI, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores")).font = NEGRITO
+            c_md = cc.cell(row=rmd, column=CV, value=f"={prod_dv}")
+            c_md.alignment = CENTRO
+            c_md.number_format = FMT_PCT
+            c_md.font = NEGRITO
+            cc.cell(row=rmd, column=CD, value=_sanitizar(f"{cfg.regiao.title()} - Média Setores"))
 
     # ============================================================ Parâmetros
     par = wb.create_sheet("Parâmetros")

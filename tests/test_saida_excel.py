@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pandas as pd
 import pytest
 
 import test_calc_modo1 as m1
-from wacc_toolkit.calc.modo1 import Fase, beta_estrutura, calcular, compor
+from wacc_toolkit.calc.fontes import Recorte
+from wacc_toolkit.calc.modo1 import Componente, Fase, beta_estrutura, calcular, compor
 from wacc_toolkit.saida.excel import _layout_principal, exportar_excel
 
 # reaproveita a fixture de bases sintéticas do motor (mesmo cenário validado em test_calc_modo1.py)
@@ -161,6 +165,83 @@ def test_alterar_peso_recalcula_em_cascata(bases_sinteticas, resultado, caminho_
     assert valores["wacc_nominal"] != pytest.approx(resultado["wacc_nominal"], abs=1e-6)
     # a nota (5) é uma fórmula de texto que também recalcula com o novo peso
     assert "50,00%" in nota5 or "50.00%" in nota5
+
+
+# ------------------------------------------------------------------ variável fora do catálogo (esquema Variável × Janela)
+def _resultado_com_rf_desconhecido(resultado):
+    """Substitui o componente ``rf`` por uma variável fictícia (id ``x_teste``, fora do catálogo de
+    ``calc/variaveis.py``): simula uma variável nova que o Excel nunca viu antes."""
+    rec_fake = Recorte("x_teste", "serie_fake",
+                       pd.DataFrame({"data": [pd.Timestamp("2025-06-30")], "valor": [5.0]}),
+                       versao=None, sha256_csv="0" * 64, descricao="recorte fictício de teste")
+    comp_fake = Componente(
+        id="rf", nome="Taxa livre de risco (Rf)", valor=0.05, formula="valor fixo de teste (variável fictícia)",
+        rotulo="Variável fictícia de teste (x_teste)", janela=None, recortes=[rec_fake],
+        detalhes={"variavel": "x_teste", "variavel_nome": "Variável fictícia de teste", "fonte": "Fonte de teste",
+                  "janelas_escolhidas": {}, "janelas_descricao": {}},
+    )
+    componentes = dict(resultado.componentes)
+    componentes["rf"] = comp_fake
+    return replace(resultado, componentes=componentes)
+
+
+def test_variavel_desconhecida_nao_quebra_o_excel(resultado, tmp_path):
+    """Item 2 do pedido: qualquer variável fora do catálogo vira valor (não fórmula) + recortes
+    genéricos, sem quebrar o arquivo."""
+    import openpyxl
+
+    r_fake = _resultado_com_rf_desconhecido(resultado)
+    caminho = exportar_excel(r_fake, tmp_path / "wacc_variavel_desconhecida.xlsx")
+    wb = openpyxl.load_workbook(caminho)
+    cc = wb["Custo de Capital"]
+    row_of = _layout_principal()
+    cel_rf = cc.cell(row=row_of["rf"], column=3)
+    assert cel_rf.value == pytest.approx(0.05)  # valor, não fórmula (não começa com "=")
+    assert cel_rf.comment is not None
+    assert "x_teste" in cel_rf.comment.text
+    assert "R_x_teste" in cel_rf.comment.text
+    desc_rf = cc.cell(row=row_of["rf"], column=4).value
+    assert desc_rf == "Variável fictícia de teste (x_teste)"
+    assert "R_x_teste" in wb.sheetnames
+    ws_rf = wb["R_x_teste"]
+    assert any("Fonte (link)" in str(row[0]) for row in ws_rf.iter_rows(values_only=True) if row[0])
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cel in row:
+                if isinstance(cel.value, str):
+                    assert "—" not in cel.value and "–" not in cel.value
+
+
+@pytest.mark.excel
+@pytest.mark.skipif(not COM_OK, reason="Excel não disponível via COM neste ambiente")
+def test_variavel_desconhecida_recalcula_dependentes_via_com(resultado, tmp_path):
+    """Item 4 do pedido: com rf fora do catálogo (valor 0.05), ERP/Ke/WACC recalculam a partir dessa
+    célula e os 20 componentes batem com compor() usando esse valor."""
+    r_fake = _resultado_com_rf_desconhecido(resultado)
+    caminho = exportar_excel(r_fake, tmp_path / "wacc_variavel_desconhecida.xlsx")
+    app, wb = _abrir_com(caminho)
+    try:
+        valores = _ler_custo_capital(wb, r_fake)
+    finally:
+        wb.Close(False)
+        app.Quit()
+
+    esperado = compor(
+        rf=0.05, rf_estrutural=resultado["rf_estrutural"], rm=resultado["rm"],
+        risco_brasil=resultado["risco_brasil"], beta_u=resultado["beta_u"], d_v=resultado["d_v"],
+        t=resultado["t"], inflacao_us=resultado["inflacao_us"], tlp=resultado["tlp"],
+        remuneracao=resultado["remuneracao_bndes"], spread=resultado["spread_credito"], ipca=resultado["ipca"],
+    )
+    assert valores["rf"] == pytest.approx(0.05, abs=1e-9)
+    for cid in ("erp", "ke_nominal", "ke_real", "wacc_real", "wacc_nominal"):
+        assert valores[cid] == pytest.approx(esperado[cid], abs=1e-9), cid
+    # os 20 componentes existem e batem com compor() (inclusive os não afetados por rf)
+    assert len(valores) == 20
+    for cid, comp in r_fake.componentes.items():
+        if cid in esperado:
+            assert valores[cid] == pytest.approx(esperado[cid], abs=1e-9), cid
+        elif cid != "rf":
+            assert valores[cid] == pytest.approx(comp.valor, abs=1e-9), cid
 
 
 def test_layout_custo_de_capital_e_capa(tmp_path, bases_sinteticas):
