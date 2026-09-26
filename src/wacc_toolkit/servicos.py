@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import asdict, dataclass
+import tomllib
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
 from .calc.fontes import Bases
-from .calc.modo1 import ConfigProjeto, Fase, Opcoes, ResultadoWACC, calcular
+from .calc.janelas import JANELAS_PADRAO, acompanha_data_base, descrever, interpretar, mes_corte
+from .calc.modo1 import ConfigProjeto, Escolha, Fase, Opcoes, ResultadoWACC, calcular
 from .calc.registro import gravar_registro
+from .calc.variaveis import calcular_grupo, variaveis_do_grupo
 from .collector import Contexto, ResultadoColeta, executar
 from .config import resolver_bases_dir
 from .registry import carregar_todos
@@ -223,7 +226,8 @@ def config_para_toml(cfg: ConfigProjeto) -> str:
 
 
 def listar_projetos(amb: Ambiente) -> list[Path]:
-    return sorted(p for p in amb.projetos.glob("*.toml") if not p.name.endswith(".conferencia.toml"))
+    return sorted(p for p in amb.projetos.glob("*.toml")
+                 if not p.name.endswith(".conferencia.toml") and not p.name.startswith("_"))
 
 
 def carregar_projeto(caminho: str | Path) -> ConfigProjeto:
@@ -247,6 +251,126 @@ def nova_config(**kw) -> ConfigProjeto:
     opcoes = kw.pop("opcoes", None)
     op = opcoes if isinstance(opcoes, Opcoes) else Opcoes(**(opcoes or {}))
     return ConfigProjeto(fases=fases, opcoes=op, **kw)
+
+
+# ------------------------------------------------------------------ catálogo de janelas do usuário
+def _arquivo_janelas(amb: Ambiente) -> Path:
+    return amb.projetos / "_janelas.toml"
+
+
+def _ler_janelas_usuario(amb: Ambiente) -> list[dict]:
+    caminho = _arquivo_janelas(amb)
+    if not caminho.exists():
+        return []
+    dados = tomllib.loads(caminho.read_text(encoding="utf-8"))
+    return [dict(j) for j in dados.get("janela", [])]
+
+
+def _gravar_janelas_usuario(amb: Ambiente, lista: list[dict]) -> None:
+    caminho = _arquivo_janelas(amb)
+    if not lista:
+        caminho.write_text("", encoding="utf-8")
+        return
+    linhas = []
+    for j in lista:
+        linhas += ["[[janela]]", f"espec = {_toml_valor(j['espec'])}", f"nome = {_toml_valor(j['nome'])}", ""]
+    caminho.write_text("\n".join(linhas).rstrip() + "\n", encoding="utf-8")
+
+
+def listar_janelas(amb: Ambiente) -> list[dict]:
+    """Catálogo de janelas disponíveis: as padrão (:data:`JANELAS_PADRAO`) e as do usuário,
+    gravadas em ``Projetos/_janelas.toml``. Cada item: ``espec``, ``nome``, ``padrao`` (bool) e
+    ``acompanha_data_base`` (``False`` para ``intervalo:...``, que não acompanha a data-base)."""
+    linhas = [{"espec": e, "nome": descrever(e), "padrao": True, "acompanha_data_base": acompanha_data_base(e)}
+             for e in JANELAS_PADRAO]
+    vistos = {e for e in JANELAS_PADRAO}
+    for j in _ler_janelas_usuario(amb):
+        espec = j["espec"]
+        if espec in vistos:
+            continue
+        vistos.add(espec)
+        nome = j.get("nome") or descrever(espec)
+        linhas.append({"espec": espec, "nome": nome, "padrao": False, "acompanha_data_base": acompanha_data_base(espec)})
+    return linhas
+
+
+def salvar_janela(amb: Ambiente, espec: str, nome: str = "") -> dict:
+    """Valida ``espec`` (:func:`~.calc.janelas.interpretar`) e grava em ``_janelas.toml``.
+    Não duplica: se ``espec`` já estiver no catálogo (padrão ou do usuário), levanta ``ValueError``."""
+    interpretar(espec, pd.Period("2100-12", "M"))  # valida a especificação (corte bem no futuro: sem recorte)
+    if any(j["espec"] == espec for j in listar_janelas(amb)):
+        raise ValueError(f"janela já existe no catálogo: {espec}")
+    nome = nome or descrever(espec)
+    lista = _ler_janelas_usuario(amb)
+    lista.append({"espec": espec, "nome": nome})
+    _gravar_janelas_usuario(amb, lista)
+    return {"espec": espec, "nome": nome, "padrao": False, "acompanha_data_base": acompanha_data_base(espec)}
+
+
+def remover_janela(amb: Ambiente, espec: str) -> None:
+    """Remove uma janela do catálogo do usuário. Não é possível remover uma janela padrão."""
+    if espec in JANELAS_PADRAO:
+        raise ValueError(f"'{espec}' é uma janela padrão; não pode ser removida")
+    lista = _ler_janelas_usuario(amb)
+    nova = [j for j in lista if j["espec"] != espec]
+    if len(nova) == len(lista):
+        raise KeyError(f"janela do usuário não encontrada: {espec}")
+    _gravar_janelas_usuario(amb, nova)
+
+
+# ------------------------------------------------------------------ alternativas (Variável × Janela)
+def aplicar_escolha(cfg: ConfigProjeto, grupo: str, escolha: Escolha) -> ConfigProjeto:
+    """Devolve uma cópia de ``cfg`` com a escolha do ``grupo`` substituída (para a tela aplicar
+    a linha escolhida na tabela de :func:`alternativas`)."""
+    return replace(cfg, variaveis={**cfg.variaveis, grupo: escolha})
+
+
+def _linha_alternativa(bases: Bases, cfg: ConfigProjeto, corte: pd.Period, grupo: str, d, escolha: Escolha,
+                       atual: Escolha | None, chave: str | None, espec: str | None, nome_janela: str | None) -> dict:
+    linha = {"grupo": grupo, "variavel": d.id, "variavel_nome": d.nome, "fonte": d.fonte,
+             "janela_chave": chave, "janela_espec": espec, "janela_nome": nome_janela,
+             "rotulo": None, "valor": None, "erro": None, "ativa": escolha == atual, "escolha": escolha}
+    try:
+        comp = calcular_grupo(bases, cfg, corte, grupo, escolha)
+        linha["rotulo"], linha["valor"] = comp.rotulo, comp.valor
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        linha["erro"] = str(e)
+    return linha
+
+
+def alternativas(amb: Ambiente, cfg: ConfigProjeto, grupo: str, bases: Bases | None = None) -> pd.DataFrame:
+    """Para cada variável do ``grupo`` e cada janela do catálogo (:func:`listar_janelas`), aplicada
+    à primeira chave de janela da variável, calcula o componente correspondente. As demais chaves
+    de janela (e os parâmetros) usam o valor da escolha atual do projeto, se for a mesma variável,
+    ou o padrão da variável. Variáveis sem janela entram uma vez por item de ``variantes_params``
+    (ou uma única vez, com os parâmetros padrão, se a variável não tiver variantes).
+
+    Reutiliza uma única instância de :class:`~.calc.fontes.Bases` (cache de séries) em todas as
+    chamadas: passe ``bases`` para reaproveitar entre grupos."""
+    bases = bases if bases is not None else Bases(amb.repo)
+    corte = mes_corte(cfg.data_base)
+    catalogo = listar_janelas(amb)
+    atual = cfg.variaveis.get(grupo)
+    linhas = []
+    for d in variaveis_do_grupo(grupo):
+        mesma_variavel = atual is not None and atual.variavel == d.id
+        janelas_base = {**d.janelas, **(atual.janelas if mesma_variavel else {})}
+        params_base = {**d.params, **(atual.params if mesma_variavel else {})}
+        if d.janelas:
+            primeira_chave = next(iter(d.janelas))
+            for jcat in catalogo:
+                janelas = {**janelas_base, primeira_chave: jcat["espec"]}
+                escolha = Escolha(d.id, janelas, params_base)
+                linhas.append(_linha_alternativa(bases, cfg, corte, grupo, d, escolha, atual, primeira_chave,
+                                                 jcat["espec"], jcat["nome"]))
+        else:
+            for variante in (d.variantes_params or ({},)):
+                params = {**d.params, **variante}
+                escolha = Escolha(d.id, {}, params)
+                linhas.append(_linha_alternativa(bases, cfg, corte, grupo, d, escolha, atual, None, None, None))
+    colunas = ["grupo", "variavel", "variavel_nome", "fonte", "janela_chave", "janela_espec", "janela_nome",
+              "rotulo", "valor", "erro", "ativa", "escolha"]
+    return pd.DataFrame(linhas, columns=colunas)
 
 
 # ------------------------------------------------------------------ cálculo e histórico

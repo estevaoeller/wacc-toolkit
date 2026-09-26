@@ -56,6 +56,9 @@ class DefVariavel:
     janelas: dict = field(default_factory=dict)     # chave -> janela padrão (ex.: {"janela": "12m"})
     params: dict = field(default_factory=dict)      # parâmetro -> padrão
     descricao: str = ""
+    # conjuntos de parâmetros a exibir como alternativas (ex.: bases de cálculo do Focus); cada
+    # item é sobreposto a `params` (ver `servicos.alternativas`)
+    variantes_params: tuple[dict, ...] = ()
 
 
 REGISTRO: dict[str, DefVariavel] = {}
@@ -138,6 +141,106 @@ def _dv_damodaran(ctx: Ctx, grupo, j, p):
     return dv
 
 
+# ------------------------------------------------------------------ variáveis novas
+def _t10_fechamento_mes(ctx: Ctx, grupo, j, p):
+    df, meta = ctx.bases.ler("fred_dgs10")
+    jan = interpretar(j["janela"], ctx.corte)
+    s = m._na_janela(m._mensal_ultimo(df, "valor"), jan)
+    m._exigir_cobertura(s, jan, NOMES_GRUPOS[grupo])
+    rec = ctx.bases.recorte("t10_fechamento", "fred_dgs10", jan.filtrar(df), meta,
+                            "US Treasury 10a, fechamento do último dia útil do mês (% a.a.)")
+    return m.Componente(grupo, NOMES_GRUPOS[grupo], s.mean() / 100,
+                        "média do fechamento do último dia útil de cada mês",
+                        f"T-10 fechamento mensal ({jan.rotulo()})", jan.to_dict(), [rec], {"n_meses": len(s)})
+
+
+def _retorno_anual_damodaran(ctx: Ctx, grupo, j, p, coluna: str, rotulo_instrumento: str):
+    espec = j["janela"]
+    jan = interpretar(espec, ctx.corte)
+    versao = ctx.bases.versao_vigente("damodaran_histretsp", ctx.data_base)
+    df, meta = ctx.bases.ler("damodaran_histretsp", versao)
+    ini, fim = jan.inicio.year, jan.fim.year
+    sub = df[(df["ano"] >= ini) & (df["ano"] <= fim)]
+    anos_presentes = set(sub["ano"])
+    faltando = sorted(set(range(ini, fim + 1)) - anos_presentes)
+    if faltando:
+        raise ValueError(f"{rotulo_instrumento} (Damodaran histretSP v{versao}): faltam os anos {faltando}")
+    valor = float(sub[coluna].mean())
+    rec = ctx.bases.recorte("damodaran_histretsp", "damodaran_histretsp", sub, meta,
+                            f"Damodaran histretSP v{versao}: retorno anual {rotulo_instrumento} ({ini}-{fim})")
+    return m.Componente(grupo, NOMES_GRUPOS[grupo], valor, f"média aritmética de {coluna} nos anos da janela",
+                        f"Damodaran histretSP {rotulo_instrumento} ({jan.rotulo()})", jan.to_dict(), [rec],
+                        {"n_anos": len(anos_presentes), "versao": versao})
+
+
+def _tbond_retorno_anual_damodaran(ctx: Ctx, grupo, j, p):
+    return _retorno_anual_damodaran(ctx, grupo, j, p, "tbond10_retorno", "T-Bond 10a")
+
+
+def _sp500_retorno_anual_damodaran(ctx: Ctx, grupo, j, p):
+    return _retorno_anual_damodaran(ctx, grupo, j, p, "sp500_retorno", "S&P 500")
+
+
+def _cds10_sem_multiplicador(ctx: Ctx, grupo, j, p):
+    mensal_cds, mc, dfd, md, completados = m._cds_mensal(ctx.bases, "investing_cds10_brasil_mensal",
+                                                          "investing_cds10_brasil")
+    jc = interpretar(j["janela_cds"], ctx.corte)
+    cds = m._na_janela(mensal_cds, jc)
+    m._exigir_cobertura(cds, jc, "CDS 10a (baixe o CSV do Investing para Bases/entrada/investing/)")
+    meses_diario = [pp for pp in completados if jc.inicio <= pp <= jc.fim]
+    cds_usado = pd.DataFrame({"data": cds.index.to_timestamp(), "ultimo": cds.values,
+                              "origem": ["diário (último pregão)" if pp in meses_diario else "mensal"
+                                        for pp in cds.index]})
+    recs = [ctx.bases.recorte("cds10", "investing_cds10_brasil_mensal", cds_usado, mc,
+                              "CDS Brasil 10a, média mensal (bps)" +
+                              ("; meses completados pela série diária" if meses_diario else ""))]
+    if meses_diario:
+        usados_d = dfd[pd.to_datetime(dfd["data"]).dt.to_period("M").isin(meses_diario)]
+        recs.append(ctx.bases.recorte("cds10_diario", "investing_cds10_brasil", usados_d, md,
+                                      "CDS Brasil 10a, diário (meses sem dado mensal)",
+                                      meses=[str(pp) for pp in meses_diario]))
+    valor = cds.mean() / 10_000
+    return m.Componente(grupo, NOMES_GRUPOS[grupo], valor, "média mensal do CDS 10a (bps) / 10.000, sem multiplicador",
+                        f"CDS 10a {jc.rotulo()}", jc.to_dict(), recs, {"cds_medio_bps": cds.mean(), "n_cds": len(cds)})
+
+
+def _cds5_vol(ctx: Ctx, grupo, j, p):
+    op = SimpleNamespace(cds_janela=j["janela_cds"], vol_janela=j["janela_vol"], ntnb_vencimento=p["ntnb_vencimento"])
+    return m.risco_brasil_com_series(ctx.bases, ctx.corte, op, "investing_cds5_brasil_mensal",
+                                     "investing_cds5_brasil", "CDS 5a", "CDS Brasil 5a", "cds5")
+
+
+def _damodaran_crp_brasil(ctx: Ctx, grupo, j, p):
+    versao = ctx.bases.versao_vigente("damodaran_ctryprem", ctx.data_base)
+    df, meta = ctx.bases.ler("damodaran_ctryprem", versao)
+    linha = df[df["country"] == "Brazil"]
+    if linha.empty:
+        raise KeyError(f"Brazil não encontrado em damodaran_ctryprem v{versao}")
+    valor = float(linha["country_risk_premium"].iloc[0])
+    rec = ctx.bases.recorte("damodaran_crp_brasil", "damodaran_ctryprem", linha, meta,
+                            f"Damodaran ctryprem v{versao}: country risk premium (Brasil)")
+    return m.Componente(grupo, NOMES_GRUPOS[grupo], valor, "country_risk_premium (Brasil)",
+                        f"Damodaran ctryprem {versao}", None, [rec], {"versao": versao})
+
+
+def _t10yie_media(ctx: Ctx, grupo, j, p):
+    df, meta = ctx.bases.ler("fred_t10yie")
+    espec = j["janela"]
+    jan = interpretar(espec, ctx.corte)
+    s = m._na_janela(m._mensal(df, "valor"), jan)
+    m._exigir_cobertura(s, jan, NOMES_GRUPOS[grupo])
+    rec = ctx.bases.recorte("t10yie", "fred_t10yie", jan.filtrar(df), meta,
+                            "Inflação implícita 10a (T10YIE, FRED), diária")
+    return m.Componente(grupo, NOMES_GRUPOS[grupo], s.mean() / 100, "média do T10YIE na janela",
+                        f"T10YIE {espec} ({jan.rotulo()})", jan.to_dict(), [rec], {"n_obs": len(s)})
+
+
+def _dv_fixo(ctx: Ctx, grupo, j, p):
+    valor = float(p["valor"])
+    return m.Componente(grupo, NOMES_GRUPOS[grupo], valor, "parâmetro fixo (entrada do usuário)",
+                        f"Fixo {valor * 100:.0f}%", None, [], {"valor": valor})
+
+
 _registrar(DefVariavel("t10_media_mensal", "T-10: média das médias mensais", "Federal Reserve (FRED GS10)",
                        ("rf", "rf_estrutural"), _t10_media_mensal, {"janela": "12m"},
                        descricao="Média das médias mensais do US Treasury 10 anos (constant maturity)."))
@@ -150,13 +253,49 @@ _registrar(DefVariavel("sp500tr_retorno_anual", "S&P 500 TR: média dos retornos
 _registrar(DefVariavel("cds10_vol_ibov_ntnb", "CDS 10a × vol. Ibovespa/NTN-B",
                        "Investing.com (CDS) / B3 (Ibovespa) / Tesouro Nacional (NTN-B)", ("risco_brasil",), _cds10_vol,
                        {"janela_cds": "120m", "janela_vol": "60m"}, {"ntnb_vencimento": "2035-05-15"},
-                       descricao="Média mensal do CDS 10a (p.b.) × σ(ln diário Ibov)/σ(ln diário PU NTN-B) / 10.000."))
+                       descricao="Média mensal do CDS 10a (p.b.) × σ(ln diário Ibov)/σ(ln diário PU NTN-B) / 10.000.",
+                       variantes_params=({"ntnb_vencimento": "2035-05-15"},)))
 _registrar(DefVariavel("implicita_gs10_fii10", "Implícita: Treasury nominal × TIPS (médias mensais)",
                        "Federal Reserve (FRED GS10 e FII10)", ("inflacao_us",), _implicita, {"janela": "12m"},
                        descricao="Média de (1 + nominal)/(1 + TIPS) − 1 mensal."))
 _registrar(DefVariavel("tlp_sgs27572", "TLP (média mensal)", "BCB, SGS 27572", ("tlp",), _tlp, {"janela": "12m"}))
 _registrar(DefVariavel("focus_ipca_mediana", "Focus IPCA: média das medianas anuais", "BCB, Focus (Olinda)",
                        ("ipca",), _focus_ipca, {}, {"anos": 10, "base_calculo": 0},
-                       descricao="Média das medianas anuais do Focus; anos sem projeção repetem o último."))
+                       descricao="Média das medianas anuais do Focus; anos sem projeção repetem o último.",
+                       variantes_params=({"base_calculo": 0}, {"base_calculo": 1})))
 _registrar(DefVariavel("damodaran_setores", "Damodaran: D/E de mercado dos setores, ponderado pelas fases",
                        "Damodaran Online (dbtfund)", ("d_v",), _dv_damodaran, {}, {"coluna": "market_de_unadjusted"}))
+
+# ------------------------------------------------------------------ variáveis novas
+_registrar(DefVariavel("t10_fechamento_mes", "T-10: fechamento do último dia útil do mês",
+                       "Federal Reserve (FRED DGS10)", ("rf", "rf_estrutural"), _t10_fechamento_mes, {"janela": "12m"},
+                       descricao="Média do fechamento diário do T-10 no último dia útil de cada mês."))
+_registrar(DefVariavel("tbond_retorno_anual_damodaran", "T-Bond 10a: retorno anual histórico (Damodaran)",
+                       "Damodaran Online (histretSP)", ("rf", "rf_estrutural"), _tbond_retorno_anual_damodaran,
+                       {"janela": "intervalo:1995-01:2024-12"},
+                       descricao="Média aritmética do retorno anual do T-Bond 10a (Damodaran histretSP) nos "
+                                 "anos-calendário cobertos pela janela; exige anos completos."))
+_registrar(DefVariavel("sp500_retorno_anual_damodaran", "S&P 500: retorno anual histórico (Damodaran)",
+                       "Damodaran Online (histretSP)", ("rm",), _sp500_retorno_anual_damodaran,
+                       {"janela": "intervalo:1995-01:2024-12"},
+                       descricao="Média aritmética do retorno anual do S&P 500 (Damodaran histretSP) nos "
+                                 "anos-calendário cobertos pela janela; exige anos completos."))
+_registrar(DefVariavel("cds10_sem_multiplicador", "CDS 10a (sem multiplicador de volatilidade)",
+                       "Investing.com (CDS Brasil 10a)", ("risco_brasil",), _cds10_sem_multiplicador,
+                       {"janela_cds": "120m"},
+                       descricao="Média mensal do CDS Brasil 10a (p.b.) / 10.000, sem o multiplicador de "
+                                 "volatilidade Ibovespa/NTN-B."))
+_registrar(DefVariavel("cds5_vol_ibov_ntnb", "CDS 5a × vol. Ibovespa/NTN-B",
+                       "Investing.com (CDS) / B3 (Ibovespa) / Tesouro Nacional (NTN-B)", ("risco_brasil",), _cds5_vol,
+                       {"janela_cds": "120m", "janela_vol": "60m"}, {"ntnb_vencimento": "2035-05-15"},
+                       descricao="Como cds10_vol_ibov_ntnb, com o CDS Brasil 5a no lugar do 10a.",
+                       variantes_params=({"ntnb_vencimento": "2035-05-15"},)))
+_registrar(DefVariavel("damodaran_crp_brasil", "Damodaran: prêmio de risco-país (Brasil)",
+                       "Damodaran Online (ctryprem)", ("risco_brasil",), _damodaran_crp_brasil,
+                       descricao="country_risk_premium do Brasil, na edição vigente na data-base. Sem janela."))
+_registrar(DefVariavel("t10yie_media", "T10YIE: inflação implícita 10a (média na janela)",
+                       "Federal Reserve (FRED T10YIE)", ("inflacao_us",), _t10yie_media, {"janela": "12m"},
+                       descricao="Média diária do breakeven de inflação 10 anos publicado pelo FRED (T10YIE)."))
+_registrar(DefVariavel("dv_fixo", "D/(D+E): valor fixo", "Parâmetro do projeto", ("d_v",), _dv_fixo, {},
+                       {"valor": 0.70}, descricao="Valor fixo informado (ex.: 'Fixo 70%' da planilha).",
+                       variantes_params=({"valor": 0.70},)))

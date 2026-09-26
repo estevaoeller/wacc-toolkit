@@ -2,11 +2,12 @@
 
 from datetime import date
 
+import pandas as pd
 import pytest
 
 import test_calc_modo1 as m1
 from wacc_toolkit import servicos as sv
-from wacc_toolkit.calc.modo1 import ConfigProjeto
+from wacc_toolkit.calc.modo1 import ConfigProjeto, Escolha
 
 bases_sinteticas = m1.bases_sinteticas
 
@@ -170,6 +171,99 @@ def test_indicadores_painel_bases_sinteticas(amb):
     assert treasury["tipo_variacao"] == "pb"
     assert list(treasury["serie"].columns) == ["data", "valor"]
     assert len(treasury["serie"]) <= 25  # ~24 meses + o mês corrente
+
+
+def test_listar_janelas_traz_as_padrao(amb):
+    from wacc_toolkit.calc.janelas import JANELAS_PADRAO
+
+    janelas = sv.listar_janelas(amb)
+    especs = [j["espec"] for j in janelas]
+    assert especs == list(JANELAS_PADRAO)
+    assert all(j["padrao"] for j in janelas)
+    intervalo = next(j for j in janelas if j["espec"] == "desde:1995-01")
+    assert intervalo["acompanha_data_base"] is True
+
+
+def test_salvar_listar_remover_janela(amb):
+    nova = sv.salvar_janela(amb, "intervalo:2016-01:2025-12", "Santa Maria: jan/16 a dez/25")
+    assert nova == {"espec": "intervalo:2016-01:2025-12", "nome": "Santa Maria: jan/16 a dez/25",
+                    "padrao": False, "acompanha_data_base": False}
+    janelas = sv.listar_janelas(amb)
+    assert len(janelas) == len(sv.listar_janelas(amb))
+    achada = next(j for j in janelas if j["espec"] == "intervalo:2016-01:2025-12")
+    assert achada == nova
+
+    with pytest.raises(ValueError, match="já existe"):
+        sv.salvar_janela(amb, "intervalo:2016-01:2025-12")
+    with pytest.raises(ValueError, match="já existe"):
+        sv.salvar_janela(amb, "12m")  # já é padrão
+    with pytest.raises(ValueError, match="janela não reconhecida"):
+        sv.salvar_janela(amb, "espec-invalida")
+
+    sv.remover_janela(amb, "intervalo:2016-01:2025-12")
+    assert "intervalo:2016-01:2025-12" not in [j["espec"] for j in sv.listar_janelas(amb)]
+    with pytest.raises(KeyError):
+        sv.remover_janela(amb, "intervalo:2016-01:2025-12")
+    with pytest.raises(ValueError, match="padrão"):
+        sv.remover_janela(amb, "12m")
+
+
+def test_arquivo_de_janelas_nao_aparece_em_listar_projetos(amb):
+    cfg = m1._cfg()
+    caminho = sv.salvar_projeto(amb, cfg, "meu_projeto")
+    sv.salvar_janela(amb, "intervalo:2016-01:2025-12")
+    assert sv.listar_projetos(amb) == [caminho]
+
+
+def test_aplicar_escolha(amb):
+    from wacc_toolkit.calc.modo1 import calcular
+
+    cfg = m1._cfg()
+    escolha_nova = Escolha("tlp_sgs27572", {"janela": "24m"})
+    cfg2 = sv.aplicar_escolha(cfg, "tlp", escolha_nova)
+    assert cfg2.variaveis["tlp"] == escolha_nova
+    assert cfg2.variaveis["rf"] == cfg.variaveis["rf"]  # os demais grupos não mudam
+    assert cfg.variaveis["tlp"].janelas["janela"] == "12m"  # cfg original intacto
+
+    r2 = calcular(cfg2, sv.Bases(amb.repo))
+    assert r2.componentes["tlp"].janela["meses"] == 24
+
+
+def test_alternativas_grupo_sem_janela(amb):
+    cfg = m1._cfg()
+    tabela = sv.alternativas(amb, cfg, "d_v")
+    assert set(tabela["variavel"]) == {"damodaran_setores", "dv_fixo"}
+    assert (tabela["janela_chave"].isna()).all()
+    ativa = tabela[tabela["ativa"]]
+    assert len(ativa) == 1 and ativa.iloc[0]["variavel"] == "damodaran_setores"
+    assert ativa.iloc[0]["valor"] == pytest.approx(0.4 * 0.5 + 0.6 * (0.5 / 1.5))
+    fixo = tabela[tabela["variavel"] == "dv_fixo"].iloc[0]
+    assert fixo["valor"] == pytest.approx(0.70) and fixo["erro"] is None
+
+
+def test_alternativas_grupo_com_janela_e_erro_capturado(amb):
+    from wacc_toolkit.calc.janelas import JANELAS_PADRAO
+
+    cfg = m1._cfg()
+    tabela = sv.alternativas(amb, cfg, "tlp")
+    assert len(tabela) == len(JANELAS_PADRAO)  # 1 variável (tlp_sgs27572) x catálogo de janelas
+    assert set(tabela["janela_espec"]) == set(JANELAS_PADRAO)
+    ativa = tabela[tabela["ativa"]]
+    assert len(ativa) == 1 and ativa.iloc[0]["janela_espec"] == "12m"
+    assert ativa.iloc[0]["valor"] == pytest.approx(0.06)
+    # janelas mais longas que a base sintética (2018-2025) faltam cobertura: erro capturado, não exceção
+    com_erro = tabela[tabela["janela_espec"] == "30a"]
+    assert len(com_erro) == 1
+    assert pd.isna(com_erro.iloc[0]["valor"]) and "faltam" in com_erro.iloc[0]["erro"]
+
+
+def test_alternativas_reusa_bases_entre_grupos(amb):
+    bases = sv.Bases(amb.repo)
+    cfg = m1._cfg()
+    for grupo in ("rf", "rf_estrutural", "rm", "risco_brasil", "d_v", "inflacao_us", "tlp", "ipca"):
+        tabela = sv.alternativas(amb, cfg, grupo, bases=bases)
+        assert not tabela.empty
+    assert bases._cache  # o cache de séries foi de fato usado
 
 
 def test_indicadores_painel_sem_dados_nao_quebra(amb, repo):

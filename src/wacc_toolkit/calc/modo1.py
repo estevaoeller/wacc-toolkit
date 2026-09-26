@@ -282,21 +282,39 @@ def rm(bases: Bases, corte: pd.Period, metodo: str, espec: str) -> Componente:
                       j.to_dict(), [rec], det)
 
 
-def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
-    # CDS 10 anos, média mensal. Meses ausentes na série mensal são completados pela série
-    # diária (último pregão do mês = "Último" do Investing mensal).
-    dfc, mc = bases.ler("investing_cds10_brasil_mensal")
-    jc = interpretar(op.cds_janela, corte)
+def _cds_mensal(bases: Bases, serie_mensal: str, serie_diaria: str
+                ) -> tuple[pd.Series, dict, pd.DataFrame | None, dict | None, pd.PeriodIndex]:
+    """Série mensal do CDS, completada pela série diária (último pregão do mês) nos meses
+    ausentes na mensal - mesma lógica usada por :func:`risco_brasil`, parametrizada nas séries,
+    para reúso por outras variáveis (ex.: ``cds10_sem_multiplicador``, ``cds5_vol_ibov_ntnb``).
+
+    Devolve ``(mensal_completada, meta_mensal, df_diario_ou_none, meta_diario_ou_none,
+    periodos_vindos_do_diario)``.
+    """
+    dfc, mc = bases.ler(serie_mensal)
     mensal_cds = _mensal(dfc, "ultimo")
     try:
-        dfd, md = bases.ler("investing_cds10_brasil")
+        dfd, md = bases.ler(serie_diaria)
         do_diario = _mensal_ultimo(dfd, "ultimo")
         completados = do_diario.index.difference(mensal_cds.index)
         mensal_cds = pd.concat([mensal_cds, do_diario.loc[completados]]).sort_index()
     except FileNotFoundError:
         dfd, md, completados = None, None, pd.PeriodIndex([], freq="M")
+    return mensal_cds, mc, dfd, md, completados
+
+
+def risco_brasil_com_series(bases: Bases, corte: pd.Period, op: Opcoes,
+                            serie_cds_mensal: str = "investing_cds10_brasil_mensal",
+                            serie_cds_diaria: str = "investing_cds10_brasil",
+                            rotulo_curto: str = "CDS 10a", rotulo_extenso: str = "CDS Brasil 10a",
+                            nome_recorte: str = "cds10") -> Componente:
+    """Como :func:`risco_brasil`, mas com a série do CDS parametrizada (ex.: CDS 5a em vez de
+    10a). ``risco_brasil`` é um caso particular desta função, com os padrões do CDS 10a - o
+    comportamento dela não muda."""
+    mensal_cds, mc, dfd, md, completados = _cds_mensal(bases, serie_cds_mensal, serie_cds_diaria)
+    jc = interpretar(op.cds_janela, corte)
     cds = _na_janela(mensal_cds, jc)
-    _exigir_cobertura(cds, jc, "CDS 10a (baixe o CSV do Investing para Bases/entrada/investing/)")
+    _exigir_cobertura(cds, jc, f"{rotulo_curto} (baixe o CSV do Investing para Bases/entrada/investing/)")
     # Volatilidades diárias (retornos ln): Ibovespa (B3) e PU da NTN-B
     jv = interpretar(op.vol_janela, corte)
     dfi, mi = bases.ler("b3_ibov")
@@ -321,8 +339,9 @@ def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
     cds_usado = pd.DataFrame({"data": cds.index.to_timestamp(), "ultimo": cds.values,
                               "origem": ["diário (último pregão)" if p in meses_diario else "mensal" for p in cds.index]})
     recs = [
-        bases.recorte("cds10", "investing_cds10_brasil_mensal", cds_usado, mc,
-                      "CDS Brasil 10a, média mensal (bps)" + ("; meses completados pela série diária" if meses_diario else "")),
+        bases.recorte(nome_recorte, serie_cds_mensal, cds_usado, mc,
+                      f"{rotulo_extenso}, média mensal (bps)" +
+                      ("; meses completados pela série diária" if meses_diario else "")),
     ]
     recs += [
         bases.recorte("ibov", "b3_ibov", dfi[(dfi["data"] >= ini_v) & (dfi["data"] <= pd.Timestamp(jv.data_fim))],
@@ -333,16 +352,23 @@ def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
     ]
     if meses_diario:  # rastreabilidade da base diária (hash no Registro); sempre após os 3 recortes principais
         usados_d = dfd[pd.to_datetime(dfd["data"]).dt.to_period("M").isin(meses_diario)]
-        recs.append(bases.recorte("cds10_diario", "investing_cds10_brasil", usados_d, md,
-                                  "CDS Brasil 10a, diário (meses sem dado mensal)",
+        recs.append(bases.recorte(f"{nome_recorte}_diario", serie_cds_diaria, usados_d, md,
+                                  f"{rotulo_extenso}, diário (meses sem dado mensal)",
                                   meses=[str(p) for p in meses_diario]))
     return Componente(
-        "risco_brasil", "Prêmio de risco Brasil", valor, "média CDS 10a (bps) × σ(ln Ibov) / σ(ln PU NTN-B) / 10.000",
-        f"CDS 10a {jc.rotulo()} × vol. {jv.rotulo()} (Ibov/NTN-B {op.ntnb_vencimento[:4]})",
+        "risco_brasil", "Prêmio de risco Brasil", valor,
+        f"média {rotulo_curto} (bps) × σ(ln Ibov) / σ(ln PU NTN-B) / 10.000",
+        f"{rotulo_curto} {jc.rotulo()} × vol. {jv.rotulo()} (Ibov/NTN-B {op.ntnb_vencimento[:4]})",
         {"cds": jc.to_dict(), "volatilidade": jv.to_dict()}, recs,
         {"cds_medio_bps": cds.mean(), "sigma_ibov": s_ibov, "sigma_ntnb": s_ntnb, "multiplicador": mult,
          "n_cds": len(cds), "n_ibov": len(ri_j), "n_ntnb": len(rn_j)},
     )
+
+
+def risco_brasil(bases: Bases, corte: pd.Period, op: Opcoes) -> Componente:
+    # CDS 10 anos, média mensal. Meses ausentes na série mensal são completados pela série
+    # diária (último pregão do mês = "Último" do Investing mensal).
+    return risco_brasil_com_series(bases, corte, op)
 
 
 def beta_estrutura(bases: Bases, cfg: ConfigProjeto) -> tuple[Componente, Componente]:
