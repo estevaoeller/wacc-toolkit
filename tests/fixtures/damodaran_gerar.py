@@ -156,6 +156,94 @@ def planilha_ctryprem(data_atualizacao: datetime | None = datetime(2026, 1, 1)) 
     return _para_bytes(wb)
 
 
+def planilha_beta_setor_legado_sheet1() -> bytes:
+    """Imita betaGlobal11.xls/betaemerg11.xls (a 1a edição arquivada, 2011): aba
+    única "Sheet1", cabeçalho já na 1a linha (sem metadados nem "Date updated"),
+    e o rótulo da 1a coluna em caixa baixa ("Industry name") — o parser deve
+    localizar o cabeçalho mesmo assim (comparação sem diferenciar maiúsculas) e
+    cair no fallback de versão por ano do arquivo, já que não há célula de
+    atualização nessa edição."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append([
+        "Industry name", "Number of firms", "Beta ", "D/E Ratio", "Tax rate",
+        "Unlevered beta", "Cash/Firm value", "Unlevered beta corrected for cash",
+    ])
+    setores = [
+        ("Setor Alfa", 42, 1.10, 0.35, 0.21, 0.85, 0.05, 0.82),
+        ("Setor Beta", 15, 0.90, 0.10, 0.19, 0.83, 0.12, 0.75),
+    ]
+    for linha in setores:
+        ws.append(list(linha))
+    return _para_bytes(wb)
+
+
+def planilha_beta_setor_legado_layout_invalido() -> bytes:
+    """Imita betas98.xls (a 1a edição arquivada da série dos EUA, 1998): aba única
+    "Sheet1", com um layout de colunas totalmente diferente nas posições que hoje
+    são "Cash/Firm value" e "Unlevered beta corrected for cash" (aqui, "Beta"
+    duplicada e "Sum of Market Cap"): o parser deve falhar com mensagem clara em
+    vez de interpretar essas colunas erradas como se fossem as obrigatórias."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append([
+        "Industry Name", "Number of Firms", "Beta", "D/E Ratio", "Tax Rate",
+        "Unlevered Beta", "Beta", "Sum of Market Cap $ (Mil)",
+    ])
+    ws.append(["Setor Alfa", 42, 1.10, 0.35, 0.21, 0.85, 1.10, 12345])
+    return _para_bytes(wb)
+
+
+def planilha_dbtfund_setor_legado_5col() -> bytes:
+    """Imita dbtfundGlobal11.xls/dbtfundemerg11.xls (2011): aba única "Sheet1",
+    sem metadados, com só 5 colunas (bem menos que as 15 atuais: sem "Book Debt
+    to Capital", sem os ajustes por leases, sem Institutional Holdings etc.) —
+    as colunas do layout atual ausentes nesta edição devem ficar NaN, desde que
+    as obrigatórias (industry_name, market_de_unadjusted) estejam presentes."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append(["Industry name", "Number of firms", "Market Debt to Capital", "Market D/E", "Effective tax rate"])
+    setores = [
+        ("Setor Alfa", 42, 0.30, 0.43, 0.21),
+        ("Setor Beta", 15, 0.15, 0.18, 0.19),
+    ]
+    for linha in setores:
+        ws.append(list(linha))
+    return _para_bytes(wb)
+
+
+def planilha_dbtfund_setor_legado_13col(data_atualizacao: datetime | None = datetime(2019, 1, 5)) -> bytes:
+    """Imita dbtfundGlobal19.xls (2019): duas abas — "Variables & FAQ" (texto
+    explicativo, sem tabela, deve ser ignorada porque a leitura procura a aba
+    "Industry Averages") e "Industry Averages" com 13 colunas: ainda sem
+    "Interest Coverage Ratio" nem "Debt to EBITDA" (que só aparecem a partir de
+    ~2022) — essas duas colunas do layout atual devem ficar NaN nesta edição."""
+    wb = Workbook()
+    ws_faq = wb.active
+    ws_faq.title = "Variables & FAQ"
+    ws_faq.append(["End Game", "explicação sintética, sem tabela de dados"])
+    ws = wb.create_sheet("Industry Averages")
+    ws.append(["Date updated:", data_atualizacao])
+    ws.append(["Raw Data from", "Fonte sintética de teste"])
+    ws.append([
+        "Industry Name", "Number of firms", "Book Debt to Capital", "Market Debt to Capital (Unadjusted)",
+        "Market D/E (unadjusted)", "Market Debt to Capital (adjusted for leases)",
+        "Market D/E (adjusted for leases)", "Effective tax rate", "Institutional Holdings",
+        "Std dev in Stock Prices", "EBITDA/Value", "Fixed Assets/Total Assets",
+        "Capital Spending/Total Assets",
+    ])
+    setores = [
+        ("Setor Alfa", 42, 0.40, 0.35, 0.55, 0.36, 0.56, 0.21, 0.60, 0.30, 0.12, 0.45, 0.05),
+        ("Setor Beta", 15, 0.20, 0.10, 0.11, 0.11, 0.12, 0.19, 0.55, 0.20, 0.08, 0.30, 0.03),
+    ]
+    for linha in setores:
+        ws.append(list(linha))
+    return _para_bytes(wb)
+
+
 def planilha_histretsp(data_atualizacao: datetime | None = datetime(2026, 1, 1)) -> bytes:
     """Imita histretSP.xls, aba "Returns by year": alguns anos de retornos
     fictícios seguidos das linhas de resumo ("Arithmetic Average...") que o
